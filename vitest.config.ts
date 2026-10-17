@@ -15,6 +15,9 @@ export default defineConfig({
       miniflare: {
         bindings: {
           ENVIRONMENT: "test",
+          AUTH_MODE: "access",
+          AUTH_SESSION_SECRET: "test-only-session-secret",
+          AUTH_SESSION_TTL_SECONDS: "43200",
           ACCESS_AUD: "test-aud",
           ACCESS_TEAM_DOMAIN: "",
           UI_ALLOWED_EMAILS: "owner@example.com,approver@example.com,harry@example.com,peter@example.com,jane@example.com,viewer@example.com",

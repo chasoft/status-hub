@@ -1,6 +1,6 @@
 # Workflow
 
-A task is one row in D1. Status changes, notes, blockers, and approvals are rows in the history. Identity always comes from the bearer token or the verified Access email, never from a tool argument or a form field that names the caller.
+A task is one row in D1. Status changes, notes, blockers, and approvals are rows in the history. Identity always comes from the bearer token or the verified UI email, never from a tool argument or a form field that names the caller. In `AUTH_MODE=access` that email is the Cloudflare Access JWT. In `AUTH_MODE=token` it is the email stored with the login token and carried by the signed session cookie. Both modes check `UI_ALLOWED_EMAILS`, then map the email with `UI_MEMBER_EMAILS`.
 
 Codes, alert thresholds, and environment variables are in [configuration](configuration.md). Tool arguments are in [MCP](mcp.md).
 
@@ -82,7 +82,7 @@ A task in `backlog`, `review`, `pending_approval`, `done`, or `cancelled` cannot
 
 ## Who can do what
 
-Group is derived from the member row on the token or, for a UI write, from the Access email.
+Group is derived from the member row on the bot token or, for a UI write, from the email on the verified UI session (`AUTH_MODE=access` or `AUTH_MODE=token`).
 
 | Group | Who | What they can change |
 |---|---|---|
@@ -116,6 +116,8 @@ Thresholds and the timezone are in [configuration](configuration.md).
 The Kanban at `/` has one column per status from `pending_approval` through `done`, and one row per project. Query parameters `project`, `member`, and `status` filter the board. Cancelled tasks sit in a separate list under the grid. The Done column shows the 10 newest matching tasks. `/done` lists every matching done task and keeps the project and member filters.
 
 `/new` creates a task through the same rules as `create_task`. The form has no member id of its own. The recorded creator is the first active member with `is_admin = 1`, ordered by id. If that member does not exist, the form returns an error.
+
+In `token` mode a browser without a session is sent to `/login`, and the header includes Log out. In `access` mode there is no login page. The Worker expects the Access JWT. Writes from either session use the mapped member, not a name typed into the form.
 
 `/t/:code` shows the request fields, reviewer, pull-request URL, time in each status, blockers, and history. A mapped member (see `UI_MEMBER_EMAILS` in [configuration](configuration.md)) who is the assignee or a leader can save `pr_url`. A session listed in `LEADERSHIP_AUTHORS` can post feedback. The stored author is the configured display name. Feedback is not an MCP tool. Bots read it from `get_task` and see `unread_feedback_count` on `list_my_tasks`.
 

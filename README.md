@@ -35,13 +35,13 @@ The board is server-rendered HTML and refreshes every 60 seconds. Times use the 
 | `/p/:code` | One project, its modules, and its features. |
 | `/t/:code` | One task: request, reviewer, blockers, time in each status, history, leadership feedback, and the pull-request URL. |
 
-The UI hostname expects a Cloudflare Access JWT. The Worker verifies that JWT again and checks an email allowlist. The MCP hostname serves only `/mcp`. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
+The UI hostname authenticates with `AUTH_MODE`. `access` (the default) expects a Cloudflare Access JWT, which the Worker verifies again, and checks an email allowlist. `token` serves a login page instead of Access. The MCP hostname serves only `/mcp` and always uses a bearer token. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
 
 ## Deploy in 10 minutes
 
 A `pnpm run setup` script is coming. Until that script is on main, use the steps below.
 
-Pluggable UI authentication (`AUTH_MODE`) is coming. This release always uses Cloudflare Access on the UI hostname and a bearer token on `/mcp`.
+`AUTH_MODE` is available. `access` is the default and uses Cloudflare Access on the UI hostname. `token` uses a built-in login page and a login token. `magic-link` is not available: sending a link needs an email provider, which this Worker does not include. MCP uses a bearer token in every mode. The variables and the login-token steps are in [docs/configuration.md](docs/configuration.md).
 
 You need Node.js 22, pnpm 10, a Cloudflare account, and a DNS zone on that account for the UI and MCP hostnames.
 
@@ -61,7 +61,16 @@ pnpm db:migrate:remote
 pnpm deploy
 ```
 
-Create a Cloudflare Access self-hosted application for the UI hostname only. Copy its AUD tag into `ACCESS_AUD` and the team domain (no `https://`) into `ACCESS_TEAM_DOMAIN`. Leave the MCP hostname off Access. Redeploy after those values change. An empty `ACCESS_AUD` denies every UI request, which is the safe default in the committed config.
+`AUTH_MODE=access` (the committed default) needs a Cloudflare Access self-hosted application for the UI hostname only. Copy its AUD tag into `ACCESS_AUD` and the team domain (no `https://`) into `ACCESS_TEAM_DOMAIN`. Leave the MCP hostname off Access. Redeploy after those values change. An empty `ACCESS_AUD` denies every UI request in `access` mode, which is the safe default in the committed config.
+
+`AUTH_MODE=token` does not use Access. Set the mode, set a session secret of at least 16 characters, and issue a login token for an email that is already in `UI_ALLOWED_EMAILS`:
+
+```bash
+npx wrangler secret put AUTH_SESSION_SECRET
+pnpm run ui-login you@example.com
+```
+
+Standard output is the raw login token (`shu_` plus random data). Standard error is the Wrangler command that stores only the SHA-256 in `ui_login_tokens`. Run that command. Deliver the raw token as a secret. Open `https://<UI_HOST>/login` and paste the token. The browser gets a signed session cookie. Log out posts to `/logout` and revokes that session. `pnpm run ui-login you@example.com staging` targets the staging database.
 
 Migration `0002_seed.sql` inserts no members and no projects. Add an admin, then mint a bot token on your machine. `created_at` is epoch milliseconds.
 
@@ -72,11 +81,11 @@ npx wrangler d1 execute status-hub --remote --command \
 pnpm run token admin
 ```
 
-Standard output is the raw token. Standard error is the Wrangler command that stores the SHA-256. Run that command. Deliver the raw token as a secret. The default `UI_MEMBER_EMAILS` value `you@example.com=admin` maps that address to member id `admin`; change the address to one your Access policy will send.
+Standard output is the raw bot token. Standard error is the Wrangler command that stores the SHA-256. Run that command. Deliver the raw token as a secret. The default `UI_MEMBER_EMAILS` value `you@example.com=admin` maps that address to member id `admin`. In `access` mode, change the address to one your Access policy will send. In `token` mode, issue the login token for that same address.
 
-Point the bot at `https://<MCP_HOST>/mcp` with header `Authorization: Bearer <token>`. Connecting a client is in [docs/mcp.md](docs/mcp.md). Open `https://<UI_HOST>/` in a browser that has passed Access.
+Point the bot at `https://<MCP_HOST>/mcp` with header `Authorization: Bearer <token>`. Connecting a client is in [docs/mcp.md](docs/mcp.md). Open `https://<UI_HOST>/` after Access, or after `/login` when `AUTH_MODE=token`.
 
-Before you deploy, `pnpm typecheck` and `pnpm test` run the same checks as CI, apart from secret scanning. `pnpm test` is also how the board and `/mcp` are exercised without a live Access application. `pnpm db:migrate:local` then `pnpm dev` starts the Worker. A request is served only when its hostname is `UI_HOST` or `MCP_HOST`, and the UI still requires a verified Access JWT.
+Before you deploy, `pnpm typecheck` and `pnpm test` run the same checks as CI, apart from secret scanning. `pnpm test` is also how the board and `/mcp` are exercised without a live Access application. `pnpm db:migrate:local` then `pnpm dev` starts the Worker. A request is served only when its hostname is `UI_HOST` or `MCP_HOST`. In `access` mode the UI requires a verified Access JWT. In `token` mode it requires the session cookie from `/login`.
 
 Staging is a second Worker. Create the database `status-hub-staging`, fill in `env.staging`, then:
 

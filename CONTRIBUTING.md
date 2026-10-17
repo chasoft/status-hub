@@ -37,7 +37,7 @@ D1 applies each file in [migrations/](migrations) once and records the filename.
 | `src/ui.ts` | Server-rendered HTML. |
 | `test/` | Vitest coverage for the rules above. |
 
-Identity stays on the token or the verified Access email. Tool arguments and form fields do not choose the caller. Follow that in new tools.
+Identity stays on the bot token or the verified UI email (`AUTH_MODE=access` or `AUTH_MODE=token`). Tool arguments and form fields do not choose the caller. Follow that in new tools.
 
 ## Pull requests
 
@@ -47,7 +47,7 @@ Identity stays on the token or the verified Access email. Tool arguments and for
 - Leave secrets, raw tokens, and production database ids out of the diff. Gitleaks runs in CI.
 - Keep the copyright and the MIT license with Chasoft Labs.
 
-A `pnpm run setup` script and a pluggable `AUTH_MODE` are not on `main`. A pull request can add either one. Until it merges, docs and code should describe Access plus bearer tokens, and the manual deploy in the [README](README.md).
+A `pnpm run setup` script is not on `main`. A pull request can add it. Until it merges, keep the manual deploy in the [README](README.md). `AUTH_MODE` is `access` or `token`. Document new auth behaviour in [docs/configuration.md](docs/configuration.md). `magic-link` needs an email provider and is not implemented.
 
 ## Security reports
 

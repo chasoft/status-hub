@@ -70,11 +70,29 @@ table{border-collapse:collapse;width:100%;background:#fff}td,th{border-bottom:1p
 
 function page(title: string, body: string, email: string, offsetMinutes: number) {
   const org = getHubConfig().orgName;
+  const logout = getHubConfig().authMode === "token"
+    ? `<form method="post" action="/logout" style="margin:0"><button type="submit">Log out</button></form>`
+    : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="60"><title>${esc(title)} · Status Hub</title><style>${CSS}</style></head><body>
 <header><b>${esc(org)}</b><a href="/">Kanban</a><a href="/new">New task</a><a href="/alerts">Alerts</a><a href="/members">Members</a>
-<span style="margin-left:auto;font-size:12px;opacity:.8">${esc(email)} · ${tzLabel(offsetMinutes)} · auto-refresh 60s</span></header>
+<span style="margin-left:auto;font-size:12px;opacity:.8">${esc(email)} · ${tzLabel(offsetMinutes)} · auto-refresh 60s</span>${logout}</header>
 <main>${body}</main></body></html>`;
+}
+
+export function renderLogin(error?: string, next?: string): string {
+  const org = getHubConfig().orgName;
+  const nextField = next ? `<input type="hidden" name="next" value="${esc(next)}">` : "";
+  const err = error ? `<p class="flag">${esc(error)}</p>` : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Log in · Status Hub</title><style>${CSS}</style></head><body>
+<header><b>${esc(org)}</b></header>
+<main><h2>Log in</h2>${err}
+<form method="post" action="/login">${nextField}
+<p><label>Login token<br><input type="password" name="token" autocomplete="current-password" required></label></p>
+<button type="submit">Log in</button></form>
+<p>Ask an operator for a login token. The token is stored only as a hash.</p>
+</main></body></html>`;
 }
 
 interface CardRow {

@@ -1,11 +1,15 @@
 import { createMcpHandler } from "agents/mcp/server";
-import { authenticateBearer, leadershipAuthor, memberForAccessEmail, verifyAccessJwt, type AccessEnv } from "./auth";
+import {
+  authenticateBearer, authenticateLoginToken, clearSessionCookie, leadershipAuthor, memberForAccessEmail,
+  openSession, resolveAuthMode, revokeSession, sessionEmail, sessionSecret, sessionTtlSeconds, verifyAccessJwt,
+  type AuthEnv,
+} from "./auth";
 import { configFromEnv, useHubConfig, type ConfigEnv } from "./config";
 import { addLeadershipFeedback, AppError, createTaskFromUi, runChecks, updateTask, type Status } from "./core";
 import { createServer } from "./mcp";
 import * as ui from "./ui";
 
-export interface Env extends AccessEnv, ConfigEnv {
+export interface Env extends AuthEnv, ConfigEnv {
   DB: D1Database;
   UI_HOST: string;
   MCP_HOST: string;
@@ -91,6 +95,7 @@ async function postFeedback(env: Env, code: string, email: string, req: Request)
 }
 
 async function handleCreate(req: Request, env: Env, url: URL): Promise<Response> {
+  if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
   const form = await req.formData();
   const str = (k: string) => {
     const v = form.get(k);
@@ -118,11 +123,78 @@ async function handleCreate(req: Request, env: Env, url: URL): Promise<Response>
   }
 }
 
+function safeNext(raw: string | null | undefined): string {
+  if (!raw || raw.length > 512) return "/";
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return "/";
+  if (raw.includes("\\") || raw.includes("://") || raw.includes("\n") || raw.includes("\r")) return "/";
+  return raw;
+}
+
+function loginRedirect(url: URL): Response {
+  const next = url.pathname + url.search;
+  const q = next && next !== "/" ? `?next=${encodeURIComponent(next)}` : "";
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/login${q}`, "cache-control": "no-store", ...SEC_HEADERS },
+  });
+}
+
+async function handleLogin(req: Request, env: Env, url: URL): Promise<Response> {
+  if (req.method === "GET") {
+    if (await sessionEmail(env.DB, req, env)) {
+      return new Response(null, { status: 303, headers: { location: "/", "cache-control": "no-store", ...SEC_HEADERS } });
+    }
+    const next = safeNext(url.searchParams.get("next"));
+    return html(ui.renderLogin(undefined, next === "/" ? "" : next));
+  }
+  if (req.method !== "POST") return text(405, "Method not allowed");
+  if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
+  const secret = sessionSecret(env);
+  if (!secret) return text(500, "AUTH_SESSION_SECRET is not set");
+  let token = "";
+  let next = "/";
+  try {
+    const form = await req.formData();
+    token = String(form.get("token") ?? "").trim();
+    next = safeNext(typeof form.get("next") === "string" ? String(form.get("next")) : "");
+  } catch {
+    return text(400, "Bad request");
+  }
+  const email = await authenticateLoginToken(env.DB, token, env.UI_ALLOWED_EMAILS);
+  if (!email) return html(ui.renderLogin("Invalid token", next === "/" ? "" : next), 401);
+  const cookie = await openSession(env.DB, email, secret, sessionTtlSeconds(env.AUTH_SESSION_TTL_SECONDS));
+  return new Response(null, {
+    status: 303,
+    headers: { location: next, "set-cookie": cookie, "cache-control": "no-store", ...SEC_HEADERS },
+  });
+}
+
+async function handleLogout(req: Request, env: Env): Promise<Response> {
+  if (req.method !== "POST") return text(405, "Method not allowed");
+  if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
+  await revokeSession(env.DB, req, env);
+  return new Response(null, {
+    status: 303,
+    headers: { location: "/login", "set-cookie": clearSessionCookie(), "cache-control": "no-store", ...SEC_HEADERS },
+  });
+}
+
 async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
-  // Defence in depth: Access protects the hostname; the Worker re-verifies the JWT
-  // so that any other path to the Worker (workers.dev, preview, mis-config) gets 403.
-  const email = await verifyAccessJwt(req, env);
-  if (!email) return text(403, "Forbidden: Cloudflare Access required");
+  const mode = resolveAuthMode(env.AUTH_MODE);
+  // magic-link needs an email sender. This Worker does not include one.
+  if (mode === "magic-link") {
+    return text(403, "AUTH_MODE=magic-link is not available. A magic link has to be emailed, and this Worker does not include an email provider.");
+  }
+  if (mode === "unknown") return text(403, "Forbidden: unknown AUTH_MODE");
+  if (mode === "token" && url.pathname === "/login") return handleLogin(req, env, url);
+  if (mode === "token" && url.pathname === "/logout") return handleLogout(req, env);
+  // Access mode re-verifies the JWT so any other path to the Worker gets 403.
+  const email = mode === "token" ? await sessionEmail(env.DB, req, env) : await verifyAccessJwt(req, env);
+  if (!email) {
+    if (mode === "access") return text(403, "Forbidden: Cloudflare Access required");
+    if (req.method === "GET") return loginRedirect(url);
+    return text(403, "Forbidden");
+  }
   if (req.method === "POST" && url.pathname === "/new") return handleCreate(req, env, url);
   const path = url.pathname;
   if (req.method === "POST") {

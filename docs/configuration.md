@@ -4,7 +4,7 @@ Status Hub reads deployment settings from Worker environment variables. The acti
 
 Committed defaults live in [wrangler.jsonc](../wrangler.jsonc). Replace the `example.com` placeholders, the Access application values, and the D1 `database_id` before you deploy. Do not commit a real account id, API token, or bot token.
 
-Pluggable UI authentication (`AUTH_MODE`) is coming and is not a variable in this release. The UI hostname always requires a Cloudflare Access JWT. MCP always requires a bearer token. See [Security](../SECURITY.md).
+UI authentication is `AUTH_MODE`, described in [UI authentication](#ui-authentication). MCP always requires a bearer token. See [Security](../SECURITY.md).
 
 ## Variables
 
@@ -15,9 +15,12 @@ Pluggable UI authentication (`AUTH_MODE`) is coming and is not a variable in thi
 | `MCP_HOST` | `mcp.example.com` | Required. Routing compares the request hostname to this value. | Hostname of the MCP server. Must match the MCP custom domain. Only `/mcp` is served. |
 | `ORG_NAME` | `Status Hub` | `Status Hub` | Text in the UI header. A blank value uses `Status Hub`. |
 | `MCP_SERVER_NAME` | `status-hub` | `status-hub` | Name advertised to MCP clients. A blank value uses `status-hub`. |
-| `ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` | The UI is denied, except in the test suite. | Access team domain, without `https://`. The JWT `iss` must be `https://` plus this domain. |
-| `ACCESS_AUD` | empty | Every UI request is denied. | Access application AUD tag for the UI hostname. |
-| `UI_ALLOWED_EMAILS` | `you@example.com` | No email is allowed, so the UI is denied. | Comma-separated emails allowed to open the UI, in addition to the Access policy. |
+| `AUTH_MODE` | `access` | `access`. A blank value is the same as `access`. | `access` verifies the Cloudflare Access JWT. `token` serves `/login`. Any other value, including `magic-link`, denies the UI. |
+| `AUTH_SESSION_TTL_SECONDS` | `43200` | `43200` (12 hours). A non-numeric or non-positive value also uses `43200`. Values above `2592000` are capped at 30 days. | Session lifetime in seconds when `AUTH_MODE=token`. Ignored for `access`. |
+| `AUTH_SESSION_SECRET` | not set in `wrangler.jsonc` | Token-mode login returns 500. `access` ignores it. A value shorter than 16 characters is treated as unset. | HMAC key for the session cookie. Set with `wrangler secret put AUTH_SESSION_SECRET`. Do not commit it. |
+| `ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` | In `access` mode the UI is denied, except in the test suite. Ignored when `AUTH_MODE=token`. | Access team domain, without `https://`. Used only for `AUTH_MODE=access`. The JWT `iss` must be `https://` plus this domain. |
+| `ACCESS_AUD` | empty | In `access` mode every UI request is denied. Ignored when `AUTH_MODE=token`. | Access application AUD tag for the UI hostname. Used only for `AUTH_MODE=access`. |
+| `UI_ALLOWED_EMAILS` | `you@example.com` | No email is allowed, so the UI is denied in both modes. | Comma-separated emails allowed to open the UI. Checked on the Access JWT and on the login token's email. |
 | `OWNER_IDS` | empty | No owner ids. | Comma-separated ids that may be `waiting_on`, `requested_by`, and `approved_by`. They do not have to be members. |
 | `APPROVER_IDS` | empty | No approver ids. | Comma-separated ids with the same request and approval privileges as owners. They do not have to be members. |
 | `UI_MEMBER_EMAILS` | `you@example.com=admin` | No explicit map. The email's local-part is used when it is an active member id. | Comma-separated `email=memberId` pairs for UI sessions. |
@@ -35,7 +38,60 @@ An alert override applies when the variable is set to a finite number, including
 
 `OWNER_IDS` and `APPROVER_IDS` are the ids your deployment already uses for approval and blockers. An existing board keeps its previous approval and blocker behaviour when those lists name the same ids it used before. An id in both lists is treated as an owner when blockers are sorted on the alerts page (owners first, then approvers, then everyone else).
 
-`UI_MEMBER_EMAILS` wins over the local-part rule. For `person@example.com` with no pair, the Worker looks up member id `person` when that id matches `^[a-z0-9-]{1,32}$`.
+`UI_MEMBER_EMAILS` wins over the local-part rule. For `person@example.com` with no pair, the Worker looks up member id `person` when that id matches `^[a-z0-9-]{1,32}$`. The same rule applies to an Access email and to a token-mode session email.
+
+## UI authentication
+
+`AUTH_MODE` chooses how a browser signs in. It does not change `/mcp`.
+
+| Mode | What the browser does |
+|---|---|
+| `access` | Sends `Cf-Access-Jwt-Assertion`. The Worker checks the signature, audience, issuer, expiry, and `UI_ALLOWED_EMAILS`. This is the committed default. |
+| `token` | Opens `/login` and submits a login token. D1 stores only the SHA-256. A signed session cookie identifies later requests. |
+| `magic-link` | Not available. The Worker returns 403. A magic link has to be emailed, and this Worker does not include an email provider. |
+| anything else | 403, with the text `unknown AUTH_MODE`. |
+
+`access` and `token` both lowercase the email, require it in `UI_ALLOWED_EMAILS`, then map it with `UI_MEMBER_EMAILS` (or the local-part rule) and `LEADERSHIP_AUTHORS`. An Access JWT is not accepted when the mode is `token`. A login token is not accepted when the mode is `access`.
+
+### Session cookie
+
+`POST /login` sets `sh_session` when the token matches a live row. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`. `Max-Age` is `AUTH_SESSION_TTL_SECONDS`. The value is a session id and an expiry, signed with HMAC-SHA256 and `AUTH_SESSION_SECRET`. The email is stored on the `ui_sessions` row, not in the cookie. Each request checks the signature, that row, both expiries, and the allowlist again.
+
+A browser GET without a session redirects to `/login`. Login and logout are POST and use the same `Sec-Fetch-Site` rule as the other UI forms. `POST /logout` sets `revoked_at` on that session and clears the cookie. The header in `token` mode includes Log out. `GET /logout` is 405.
+
+`next` after login must be a same-site path. A value such as `https://evil.example` or `//evil.example` is ignored and the browser is sent to `/`.
+
+### Create a login token
+
+Apply migrations first so `ui_login_tokens` and `ui_sessions` exist (`pnpm db:migrate:remote` or the staging command). Put the email in `UI_ALLOWED_EMAILS`. Set the session secret, then mint the token on your machine:
+
+```bash
+npx wrangler secret put AUTH_SESSION_SECRET
+pnpm run ui-login you@example.com
+```
+
+`pnpm run ui-login` runs `node scripts/gen-ui-login.mjs`. Use `run`. Plain `pnpm ui-login` is a different command. Stdout is the raw token: `shu_` plus 32 random bytes, base64url-encoded. Stderr is a `wrangler d1 execute` statement that inserts the id, the hex SHA-256, the lowercased email, and `created_at`. The SQL does not contain the raw token. Run that statement. Deliver the raw token as a secret. Do not commit it.
+
+A second run inserts another row for the same email. Both tokens work until revoked or expired. The script leaves `expires_at` NULL, which means the login token does not expire. Set `expires_at` to epoch milliseconds if you want a deadline. That deadline blocks new sessions only. A session that already exists keeps the expiry it was given at login, until logout revokes it.
+
+Staging:
+
+```bash
+npx wrangler secret put AUTH_SESSION_SECRET --env staging
+pnpm run ui-login you@example.com staging
+```
+
+Revoke a login token so it cannot open new sessions. Use the current epoch milliseconds:
+
+```sql
+UPDATE ui_login_tokens SET revoked_at = 1710000000000 WHERE email = 'you@example.com' AND revoked_at IS NULL;
+```
+
+Sessions already issued for that email stay valid until they expire or the person logs out. End them immediately with:
+
+```sql
+UPDATE ui_sessions SET revoked_at = 1710000000000 WHERE email = 'you@example.com' AND revoked_at IS NULL;
+```
 
 ## Staging
 
@@ -48,6 +104,8 @@ An alert override applies when the variable is set to a finite number, including
 | `MCP_HOST` | `mcp-staging.example.com` |
 | `ORG_NAME` | `Status Hub` |
 | `MCP_SERVER_NAME` | `status-hub` |
+| `AUTH_MODE` | `access` |
+| `AUTH_SESSION_TTL_SECONDS` | `43200` |
 | `ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` |
 | `ACCESS_AUD` | empty |
 | `UI_ALLOWED_EMAILS` | `you@example.com` |
@@ -56,7 +114,7 @@ An alert override applies when the variable is set to a finite number, including
 | `UI_MEMBER_EMAILS` | `you@example.com=admin` |
 | `LEADERSHIP_AUTHORS` | `you@example.com=Owner` |
 
-The alert variables are unset in staging as well, so staging uses its own `settings` table after migrations. Custom domains, `workers_dev: false`, `preview_urls: false`, and the `*/5 * * * *` cron are set again on the staging env.
+The alert variables are unset in staging as well, so staging uses its own `settings` table after migrations. `AUTH_SESSION_SECRET` is not a var. Set it with `wrangler secret put AUTH_SESSION_SECRET --env staging` when staging uses `AUTH_MODE=token`. Custom domains, `workers_dev: false`, `preview_urls: false`, and the `*/5 * * * *` cron are set again on the staging env.
 
 ```bash
 pnpm db:migrate:staging
@@ -119,8 +177,9 @@ UPDATE settings SET value = '30' WHERE key = 'not_started_minutes';
 | `0005_leadership_feedback.sql` | Leadership feedback. |
 | `0006_task_reviewer.sql` | `reviewer_id`. |
 | `0007_configurable_roles.sql` | Drops fixed requester, approver, and feedback-author checks so those lists come from env. |
+| `0008_ui_login.sql` | `ui_login_tokens` (SHA-256 of a UI login token) and `ui_sessions` (rows behind the session cookie). |
 
-Do not rename `0001` through `0007`. Add a new schema change as the next number, `0008` or later, and make it additive.
+Do not rename `0001` through `0008`. Add a new schema change as the next number, `0009` or later, and make it additive.
 
 ## Members and tokens
 
@@ -136,3 +195,5 @@ pnpm run token admin
 `pnpm run token` runs `node scripts/gen-token.mjs`. Use `run`. Plain `pnpm token` is a different command and does not mint a Status Hub token. The script prints the raw token on stdout and, on stderr, a `wrangler d1 execute` statement that stores the SHA-256 in `members.token_hash`. Run that statement. A later hash replaces the previous one. There is one hash column per member.
 
 Revoke from an admin bot with `set_token_hash` and `"sha256": null`, or set `token_hash` to `NULL` in SQL. Never send the raw token to `set_token_hash`.
+
+A bot token is not a UI login token. Bot tokens start with `shk_` and live in `members.token_hash`. UI login tokens start with `shu_` and live in `ui_login_tokens`. Mint those with `pnpm run ui-login <email>`, described under [UI authentication](#ui-authentication).

@@ -15,6 +15,21 @@
   "vars": {
     // "production" or "staging". Tests set "test" so they can inject a JWKS.
     "ENVIRONMENT": "production",
+    // AUTH_MODE: how the UI authenticates.
+    // "access" verifies the Cloudflare Access JWT (Cf-Access-Jwt-Assertion). Unchanged default.
+    // "token" serves /login. The operator enters a login token from scripts/gen-ui-login.mjs.
+    //   D1 stores only the SHA-256 in ui_login_tokens. A signed HttpOnly Secure SameSite=Lax
+    //   session cookie expires after AUTH_SESSION_TTL_SECONDS. POST /logout revokes that session.
+    //   UI_ALLOWED_EMAILS, UI_MEMBER_EMAILS, and LEADERSHIP_AUTHORS still apply to the token's email.
+    // "magic-link" is future work. A magic link has to be emailed, and this Worker does not
+    //   include an email provider. The mode is rejected.
+    "AUTH_MODE": "access",
+    // AUTH_SESSION_TTL_SECONDS: session lifetime when AUTH_MODE=token. Default 43200 (12 hours), max 2592000.
+    // Ignored for AUTH_MODE=access.
+    "AUTH_SESSION_TTL_SECONDS": "43200",
+    // AUTH_SESSION_SECRET: HMAC key for the token-mode session cookie. Required when AUTH_MODE=token.
+    // Set with `wrangler secret put AUTH_SESSION_SECRET` (at least 16 characters). Do not commit the value.
+    // Ignored for AUTH_MODE=access.
     // UI_HOST: hostname of the Kanban UI. Must match the UI custom domain above.
     "UI_HOST": "status.example.com",
     // MCP_HOST: hostname of the MCP server. Must match the MCP custom domain. Only /mcp is served.
@@ -70,6 +85,10 @@
       ],
       "vars": {
         "ENVIRONMENT": "staging",
+        // Same AUTH_MODE values as production. magic-link is future work (no email provider).
+        "AUTH_MODE": "access",
+        "AUTH_SESSION_TTL_SECONDS": "43200",
+        // AUTH_SESSION_SECRET: `wrangler secret put AUTH_SESSION_SECRET --env staging`. Do not commit it.
         "UI_HOST": "status-staging.example.com",
         "MCP_HOST": "mcp-staging.example.com",
         "ORG_NAME": "Status Hub",

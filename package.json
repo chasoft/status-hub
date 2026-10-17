@@ -14,6 +14,7 @@
     "db:migrate:local": "wrangler d1 migrations apply status-hub --local",
     "db:migrate:remote": "wrangler d1 migrations apply status-hub --remote",
     "token": "node scripts/gen-token.mjs",
+    "ui-login": "node scripts/gen-ui-login.mjs",
     "db:migrate:staging": "wrangler d1 migrations apply status-hub-staging --env staging --remote",
     "deploy:staging": "wrangler deploy --env staging"
   },
