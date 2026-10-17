@@ -47,7 +47,7 @@ Identity stays on the bot token or the verified UI email (`AUTH_MODE=access` or 
 - Leave secrets, raw tokens, and production database ids out of the diff. Gitleaks runs in CI.
 - Keep the copyright and the MIT license with Chasoft Labs.
 
-A `pnpm run setup` script is not on `main`. A pull request can add it. Until it merges, keep the manual deploy in the [README](README.md). `AUTH_MODE` is `access` or `token`. Document new auth behaviour in [docs/configuration.md](docs/configuration.md). `magic-link` needs an email provider and is not implemented.
+`pnpm run setup` is the bootstrap described in the [README](README.md). `AUTH_MODE` is `access` or `token`. Document auth behaviour in [docs/configuration.md](docs/configuration.md). `magic-link` needs an email provider and is not implemented.
 
 ## Security reports
 

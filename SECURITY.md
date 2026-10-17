@@ -45,7 +45,7 @@ When `AUTH_MODE` is `token`, the UI uses a login token instead of Access.
 - The email must be in `UI_ALLOWED_EMAILS`. A revoked row (`revoked_at`) or an `expires_at` in the past cannot open a session.
 - `AUTH_SESSION_SECRET` (at least 16 characters) signs cookie `sh_session` with HMAC-SHA256. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`. A missing or short secret makes login return 500 and sets no cookie.
 - `ui_sessions` stores the email and expiry. `POST /logout` sets `revoked_at`. Replaying the cookie after logout fails. Login and logout use the same `Sec-Fetch-Site` rule as other UI form posts.
-- Mint with `pnpm run ui-login <email>`. Stdout is the secret. Stderr is the command that writes the hash. Deliver the raw token through a secret channel. Do not put it in the repository, and do not log the raw token, the cookie, or `AUTH_SESSION_SECRET`.
+- `pnpm run setup -- --auth-mode token` generates `AUTH_SESSION_SECRET`, uploads it with `wrangler secret put` (the value is not printed), and prints the first admin UI login token once on stdout. It does not write either value to disk. Further tokens use `pnpm run ui-login <email>`. For that command, stdout is the token and stderr is the SQL that writes the hash. Deliver the raw token through a secret channel. Do not put it in the repository, and do not log the raw token, the cookie, or `AUTH_SESSION_SECRET`.
 
 `magic-link` is rejected. Sending a link needs an email provider, which this Worker does not include.
 
@@ -58,7 +58,7 @@ Format: `shk_<memberId>_<secret>`.
 - D1 stores hex SHA-256 of the whole token in `members.token_hash`. The compare uses `crypto.subtle.timingSafeEqual`.
 - A missing hash or a bad token returns HTTP 401 and `{ "error": "unauthorized" }` with `WWW-Authenticate: Bearer realm="status-hub"`.
 - One hash per member. Storing a new hash replaces the old token. `set_token_hash` with `sha256: null` revokes it. That tool is admin-only and accepts the hash, never the raw token.
-- Mint tokens with `pnpm run token <member-id>` (`node scripts/gen-token.mjs`). Stdout is the secret. Stderr is the command that writes the hash. Deliver the raw token through a secret channel. Do not put it in chat, shell history you keep, the repository, or a prompt log.
+- `pnpm run setup` prints the first admin token once on stdout and stores only the SHA-256. It does not write the raw token to disk. Further tokens use `pnpm run token <member-id>` (`node scripts/gen-token.mjs`). Stdout is the secret. Stderr is the command that writes the hash. Deliver the raw token through a secret channel. Do not put it in chat, shell history you keep, the repository, or a prompt log.
 - The members page shows whether a hash is present. It does not show the hash.
 
 ## UI writes
@@ -79,7 +79,7 @@ The create-task form records the first active `is_admin` member as the creator. 
 - Raw bot tokens, raw UI login tokens, and production hash values from `members.token_hash` or `ui_login_tokens`.
 - `AUTH_SESSION_SECRET`. Set it with `wrangler secret put`, not in `wrangler.jsonc`.
 - Cloudflare API tokens and account ids.
-- A real D1 `database_id`. The ids in `wrangler.jsonc` are placeholders.
+- A real D1 `database_id`. The ids in `wrangler.jsonc` are placeholders. `pnpm run setup` writes real ids to gitignored `wrangler.local.jsonc`.
 - `.dev.vars` and other local secret files. `.dev.vars*` is gitignored.
 
 CI runs gitleaks on the tree. `database_id` placeholders and the example emails in `wrangler.jsonc` are intentional.

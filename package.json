@@ -7,16 +7,17 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "setup": "node scripts/setup.mjs",
+    "deploy": "node scripts/deploy.mjs",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.node.config.mjs",
     "db:migrate:local": "wrangler d1 migrations apply status-hub --local",
-    "db:migrate:remote": "wrangler d1 migrations apply status-hub --remote",
+    "db:migrate:remote": "wrangler d1 migrations apply status-hub --remote --config wrangler.local.jsonc",
     "token": "node scripts/gen-token.mjs",
     "ui-login": "node scripts/gen-ui-login.mjs",
-    "db:migrate:staging": "wrangler d1 migrations apply status-hub-staging --env staging --remote",
-    "deploy:staging": "wrangler deploy --env staging"
+    "db:migrate:staging": "wrangler d1 migrations apply status-hub-staging --env staging --remote --config wrangler.local.jsonc",
+    "deploy:staging": "node scripts/deploy.mjs --env staging"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.3.1",

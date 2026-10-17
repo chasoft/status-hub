@@ -39,7 +39,7 @@ The UI hostname authenticates with `AUTH_MODE`. `access` (the default) expects a
 
 ## Deploy in 10 minutes
 
-A `pnpm run setup` script is coming. Until that script is on main, use the steps below.
+`pnpm run setup` is the bootstrap. It checks Wrangler login, creates or reuses the D1 database by name, writes gitignored `wrangler.local.jsonc` from [wrangler.jsonc](wrangler.jsonc), applies migrations, creates the first admin member, and prints a one-time MCP token. Only the SHA-256 is stored. Run it again safely: an existing database is reused, and an existing admin token stays unless you pass `--rotate-token`. Every flag is also listed by `pnpm run setup -- --help` and in [docs/configuration.md](docs/configuration.md).
 
 `AUTH_MODE` is available. `access` is the default and uses Cloudflare Access on the UI hostname. `token` uses a built-in login page and a login token. `magic-link` is not available: sending a link needs an email provider, which this Worker does not include. MCP uses a bearer token in every mode. The variables and the login-token steps are in [docs/configuration.md](docs/configuration.md).
 
@@ -50,49 +50,79 @@ git clone https://github.com/chasoft/status-hub.git
 cd status-hub
 corepack enable
 pnpm install
-npx wrangler login
-npx wrangler d1 create status-hub
+pnpm exec wrangler login
+pnpm run setup
+pnpm run deploy
 ```
 
-Paste the printed database id into `database_id` in [wrangler.jsonc](wrangler.jsonc). Replace the `example.com` hostnames, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and the email lists. The defaults and the meaning of each variable are in [docs/configuration.md](docs/configuration.md).
+The prompts are the org name, timezone, UI hostname, MCP hostname, owner ids, approver ids, the first admin's id, name, and email, and UI auth mode (`access` or `token`). Press Enter to keep `access`. Timezone accepts an IANA name (`America/Los_Angeles`), `UTC`, a clock offset (`+08:00` or `-5`), or minutes east of UTC (`-300`). A named zone uses the offset in effect when you run setup. After a daylight-saving change, run setup again. Press Enter on owner or approver ids to leave that list empty.
 
-```bash
-pnpm db:migrate:remote
-pnpm deploy
-```
+`access` is the default. Create a Cloudflare Access self-hosted application for the UI hostname only. Pass the team domain (no `https://`) and the AUD tag to the prompts, or to `--access-team-domain` and `--access-aud`. Leave the MCP hostname off Access. An empty `ACCESS_AUD` denies every UI request in `access` mode. Redeploy after you change those values: `pnpm run deploy`.
 
-`AUTH_MODE=access` (the committed default) needs a Cloudflare Access self-hosted application for the UI hostname only. Copy its AUD tag into `ACCESS_AUD` and the team domain (no `https://`) into `ACCESS_TEAM_DOMAIN`. Leave the MCP hostname off Access. Redeploy after those values change. An empty `ACCESS_AUD` denies every UI request in `access` mode, which is the safe default in the committed config.
+`token` does not use Access. Setup writes `AUTH_MODE` into `wrangler.local.jsonc`, runs `wrangler secret put AUTH_SESSION_SECRET` with a generated value of at least 16 characters, and prints a one-time UI login token (`shu_…`) for the admin email. Only the SHA-256 is stored in `ui_login_tokens`. The secret is not printed and is not written into the config file. Open `https://<UI_HOST>/login` and paste the token. The browser gets a signed session cookie. Log out posts to `/logout` and revokes that session. A later setup leaves an existing secret and login token in place unless you pass `--rotate-session-secret` or `--rotate-ui-token`. `wrangler secret put` uploads the secret onto the Worker, creating a draft script when the Worker does not exist yet. `pnpm run deploy` publishes the real script and keeps that secret. Further login tokens still use `pnpm run ui-login <email>`.
 
-`AUTH_MODE=token` does not use Access. Set the mode, set a session secret of at least 16 characters, and issue a login token for an email that is already in `UI_ALLOWED_EMAILS`:
-
-```bash
-npx wrangler secret put AUTH_SESSION_SECRET
-pnpm run ui-login you@example.com
-```
-
-Standard output is the raw login token (`shu_` plus random data). Standard error is the Wrangler command that stores only the SHA-256 in `ui_login_tokens`. Run that command. Deliver the raw token as a secret. Open `https://<UI_HOST>/login` and paste the token. The browser gets a signed session cookie. Log out posts to `/logout` and revokes that session. `pnpm run ui-login you@example.com staging` targets the staging database.
-
-Migration `0002_seed.sql` inserts no members and no projects. Add an admin, then mint a bot token on your machine. `created_at` is epoch milliseconds.
-
-```bash
-NOW=$(node -e 'console.log(Date.now())')
-npx wrangler d1 execute status-hub --remote --command \
-  "INSERT INTO members (id, name, role, is_admin, created_at) VALUES ('admin', 'Board admin', 'admin', 1, $NOW)"
-pnpm run token admin
-```
-
-Standard output is the raw bot token. Standard error is the Wrangler command that stores the SHA-256. Run that command. Deliver the raw token as a secret. The default `UI_MEMBER_EMAILS` value `you@example.com=admin` maps that address to member id `admin`. In `access` mode, change the address to one your Access policy will send. In `token` mode, issue the login token for that same address.
+Stdout is each raw token, once: the MCP token, then the UI login token when the mode is `token`. Deliver them as secrets. The script also sets `UI_ALLOWED_EMAILS`, `UI_MEMBER_EMAILS`, and `LEADERSHIP_AUTHORS` from that admin. The placeholder `you@example.com` is removed. Further members still use SQL plus `pnpm run token <member-id>`, described in [docs/configuration.md](docs/configuration.md).
 
 Point the bot at `https://<MCP_HOST>/mcp` with header `Authorization: Bearer <token>`. Connecting a client is in [docs/mcp.md](docs/mcp.md). Open `https://<UI_HOST>/` after Access, or after `/login` when `AUTH_MODE=token`.
 
-Before you deploy, `pnpm typecheck` and `pnpm test` run the same checks as CI, apart from secret scanning. `pnpm test` is also how the board and `/mcp` are exercised without a live Access application. `pnpm db:migrate:local` then `pnpm dev` starts the Worker. A request is served only when its hostname is `UI_HOST` or `MCP_HOST`. In `access` mode the UI requires a verified Access JWT. In `token` mode it requires the session cookie from `/login`.
+### Non-interactive setup
 
-Staging is a second Worker. Create the database `status-hub-staging`, fill in `env.staging`, then:
+`--yes` (or `CI`, or `STATUS_HUB_NONINTERACTIVE=1`) skips prompts. Flags override the matching environment variable. Owner and approver ids default to empty when omitted.
 
 ```bash
-pnpm db:migrate:staging
-pnpm deploy:staging
+pnpm run setup -- --yes \
+  --org "Acme" \
+  --timezone UTC \
+  --ui-host status.acme.example \
+  --mcp-host mcp.acme.example \
+  --owner-ids ada \
+  --approver-ids cara \
+  --admin-id ada \
+  --admin-name "Ada Lovelace" \
+  --admin-email ada@acme.example \
+  --auth-mode access \
+  --access-team-domain acme.cloudflareaccess.com \
+  --access-aud "<aud-tag>"
 ```
+
+Token mode uses the same required flags plus `--auth-mode token`. Omit the Access flags. Setup uploads `AUTH_SESSION_SECRET` and prints the UI login token.
+
+| Flag | Environment variable | Required with `--yes` |
+|---|---|---|
+| `--org` | `STATUS_HUB_ORG_NAME` | yes |
+| `--timezone` | `STATUS_HUB_TIMEZONE` | yes |
+| `--ui-host` | `STATUS_HUB_UI_HOST` | yes |
+| `--mcp-host` | `STATUS_HUB_MCP_HOST` | yes |
+| `--admin-id` | `STATUS_HUB_ADMIN_ID` | yes |
+| `--admin-name` | `STATUS_HUB_ADMIN_NAME` | yes |
+| `--admin-email` | `STATUS_HUB_ADMIN_EMAIL` | yes |
+| `--auth-mode` | `STATUS_HUB_AUTH_MODE` | no, default `access` (`token` mints the UI login) |
+| `--rotate-ui-token` | `STATUS_HUB_ROTATE_UI_TOKEN=1` | no |
+| `--rotate-session-secret` | `STATUS_HUB_ROTATE_SESSION_SECRET=1` | no |
+| `--owner-ids` | `STATUS_HUB_OWNER_IDS` | no |
+| `--approver-ids` | `STATUS_HUB_APPROVER_IDS` | no |
+| `--database-name` | `STATUS_HUB_DATABASE_NAME` | no, default `status-hub` |
+| `--staging` | `STATUS_HUB_STAGING=1` | no |
+| `--staging-ui-host` | `STATUS_HUB_STAGING_UI_HOST` | with `--staging` |
+| `--staging-mcp-host` | `STATUS_HUB_STAGING_MCP_HOST` | with `--staging` |
+| `--staging-database-name` | `STATUS_HUB_STAGING_DATABASE_NAME` | no, default `status-hub-staging` |
+| `--access-team-domain` | `STATUS_HUB_ACCESS_TEAM_DOMAIN` | no |
+| `--access-aud` | `STATUS_HUB_ACCESS_AUD` | no |
+| `--rotate-token` | `STATUS_HUB_ROTATE_TOKEN=1` | no |
+| `--dry-run` | `STATUS_HUB_DRY_RUN=1` | no |
+| `--skip-login-check` | `STATUS_HUB_SKIP_LOGIN=1` | no |
+
+`--dry-run` prints the generated config and does not call Cloudflare or write a file. For CI, set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` instead of `wrangler login`.
+
+Before you deploy, `pnpm typecheck` and `pnpm test` run the same checks as CI, apart from secret scanning. `pnpm test` is also how the board and `/mcp` are exercised without a live Access application. `pnpm db:migrate:local` then `pnpm dev` starts the Worker against `wrangler.jsonc`. After setup, `pnpm exec wrangler dev --config wrangler.local.jsonc` uses the hostnames you entered. A request is served only when its hostname is `UI_HOST` or `MCP_HOST`. In `access` mode the UI requires a verified Access JWT. In `token` mode it requires the session cookie from `/login`.
+
+Staging is a second Worker and a second database. Pass `--staging` plus the staging hostnames (the same fields, with `STATUS_HUB_STAGING_UI_HOST` and `STATUS_HUB_STAGING_MCP_HOST`). Setup creates or reuses `status-hub-staging`, writes `env.staging` in `wrangler.local.jsonc`, migrates it, and prints a separate MCP token. In `token` mode it also uploads a separate `AUTH_SESSION_SECRET` and prints a separate UI login token.
+
+```bash
+pnpm run deploy:staging
+```
+
+`pnpm run deploy` and `pnpm run deploy:staging` use `wrangler.local.jsonc` when that file exists. Later migrations use `pnpm db:migrate:remote` and `pnpm db:migrate:staging`, which read the same file.
 
 ## Codes
 

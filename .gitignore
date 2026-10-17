@@ -4,3 +4,4 @@ dist/
 .dev.vars*
 *.log
 worker-configuration.d.ts
+wrangler.local.jsonc

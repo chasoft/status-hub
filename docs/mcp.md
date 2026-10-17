@@ -20,7 +20,7 @@ The Worker strips CORS headers (`corsOptions: false` on the MCP handler). Call i
 Authorization: Bearer shk_<memberId>_<secret>
 ```
 
-Mint the token with `pnpm run token <member-id>` after that member exists. Details, storage, and revocation are in [Security](../SECURITY.md) and [Configuration](configuration.md).
+`pnpm run setup` prints the first admin token. Mint another with `pnpm run token <member-id>` after that member exists. Details, storage, and revocation are in [Security](../SECURITY.md) and [Configuration](configuration.md).
 
 This bearer token is only for `/mcp`. UI sign-in is `AUTH_MODE` in [Configuration](configuration.md): `access` (Cloudflare Access) or `token` (a login token from `pnpm run ui-login <email>`). A UI login token starts with `shu_` and is stored as a SHA-256 in `ui_login_tokens`. It is not accepted on `/mcp`. A bot token starts with `shk_` and is not a UI login token. `magic-link` is not available, because sending a link needs an email provider.
 
