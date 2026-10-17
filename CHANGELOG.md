@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to Status Hub are documented in this file. The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers match [package.json](package.json). The license is MIT. Copyright (c) 2026 Chasoft Labs.
+
+## 0.1.0 - 2026-10-17
+
+First open-source release. One Cloudflare Worker, one D1 database, an MCP server for bots, and a server-rendered Kanban board for people.
+
+### Added
+
+- Kanban at `/` with a column per status, a row per project, and filters for project, member, and status. The Done column shows the 10 newest tasks and links to `/done`.
+- Task pages with request fields, reviewer, blockers, time in status, history, leadership feedback, and a pull-request URL.
+- Project, module, feature, and task codes. Feature and task numbers are allocated in one D1 batch.
+- Status lifecycle: `pending_approval`, `backlog`, `assigned`, `in_progress`, `review`, `blocked`, `done`, `cancelled`, with the transitions enforced in `src/core.ts`.
+- Pending approval. A missing request field, or a caller who is not an admin, creates the task in `pending_approval`. Leaving that status is admin-only and records `approved_by`.
+- Reviewer required when a task first moves to `review`.
+- Blockers (`need_info`, `dependency`, `access`, `bug`) that move a task to `blocked` until the last one is resolved.
+- Leadership feedback from allowlisted UI sessions, with an unread flag for the assignee.
+- Alerts `NOT_STARTED`, `STALE`, `BLOCKED_LONG`, and `OVERDUE`, raised by a cron every five minutes. Thresholds live in the `settings` table and can be overridden by env vars.
+- MCP tools on `POST /mcp`: `whoami`, `list_my_tasks`, `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `get_task`, `get_task_timeline`, `get_project_overview`, `list_alerts`, `create_feature`, `create_task`, `update_task`, `assign_task`, `create_project`, `create_module`, `set_token_hash`.
+- Bearer tokens of the form `shk_<memberId>_<secret>`. D1 stores the SHA-256. `scripts/gen-token.mjs` mints a token locally.
+- UI authentication with a Cloudflare Access JWT, checked again in the Worker, plus `UI_ALLOWED_EMAILS`.
+- Hostname lock: only `UI_HOST` and `MCP_HOST` respond. `workers.dev` and preview URLs are disabled.
+- Migrations `0001` through `0007`, including a no-op seed file.
+- Vitest suite, TypeScript check, and gitleaks in CI.
+- Public docs: README, configuration, MCP, workflow, contributing, and this changelog.
