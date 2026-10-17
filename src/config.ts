@@ -22,6 +22,8 @@ export interface HubConfig {
   blockedHours?: number;
   /** Minutes east of UTC. 0 is UTC. When unset, the settings table (default 0) is used. */
   tzOffsetMinutes?: number;
+  /** UI auth. Only "token" changes the pages; every other mode stays on the Access chrome. */
+  authMode: "access" | "token";
 }
 
 export interface ConfigEnv {
@@ -37,6 +39,7 @@ export interface ConfigEnv {
   STALE_WORK_END_HOUR?: string;
   BLOCKED_HOURS?: string;
   TZ_OFFSET_MINUTES?: string;
+  AUTH_MODE?: string;
 }
 
 const DEFAULTS: HubConfig = {
@@ -46,6 +49,7 @@ const DEFAULTS: HubConfig = {
   orgName: "Status Hub",
   emailMembers: {},
   leadershipAuthors: {},
+  authMode: "access",
 };
 
 let active: HubConfig = DEFAULTS;
@@ -104,6 +108,7 @@ export function configFromEnv(env: ConfigEnv): HubConfig {
     staleWorkEndHour: optionalNumber(env.STALE_WORK_END_HOUR),
     blockedHours: optionalNumber(env.BLOCKED_HOURS),
     tzOffsetMinutes: optionalNumber(env.TZ_OFFSET_MINUTES),
+    authMode: env.AUTH_MODE?.trim().toLowerCase() === "token" ? "token" : "access",
   };
 }
 

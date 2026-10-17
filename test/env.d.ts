@@ -12,6 +12,9 @@ declare global {
       UI_MEMBER_EMAILS?: string;
       LEADERSHIP_AUTHORS?: string;
       UI_ALLOWED_EMAILS?: string;
+      AUTH_MODE?: string;
+      AUTH_SESSION_SECRET?: string;
+      AUTH_SESSION_TTL_SECONDS?: string;
       TEST_MIGRATIONS: D1Migration[];
       TEST_PRIVATE_JWK: string;
     }

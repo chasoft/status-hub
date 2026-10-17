@@ -85,6 +85,164 @@ export interface AccessEnv {
   TEST_ACCESS_JWKS?: string;    // honoured only when ENVIRONMENT === "test"
 }
 
+export interface AuthEnv extends AccessEnv {
+  AUTH_MODE?: string;
+  AUTH_SESSION_SECRET?: string;
+  AUTH_SESSION_TTL_SECONDS?: string;
+}
+
+/** Same allow-list for every UI mode. Empty or omitted means nobody. */
+export function emailAllowed(allowList: string | undefined, email: string): boolean {
+  const allow = (allowList ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  return allow.includes(email.trim().toLowerCase());
+}
+
+export type AuthMode = "access" | "token" | "magic-link" | "unknown";
+
+/**
+ * Blank and "access" keep Cloudflare Access. "magic-link" is recognized so the
+ * Worker can refuse it: sending a link needs an email provider, which is not bundled.
+ */
+export function resolveAuthMode(value: string | undefined): AuthMode {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "" || v === "access") return "access";
+  if (v === "token") return "token";
+  if (v === "magic-link") return "magic-link";
+  return "unknown";
+}
+
+const LOGIN_TOKEN = /^shu_[A-Za-z0-9_-]{43,128}$/;
+const SESSION_COOKIE = "sh_session";
+const DEFAULT_TTL = 12 * 60 * 60;
+const MAX_TTL = 30 * 24 * 60 * 60;
+const MIN_SECRET = 16;
+
+export function sessionTtlSeconds(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return DEFAULT_TTL;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TTL;
+  return Math.min(Math.floor(n), MAX_TTL);
+}
+
+/** Null when the secret is missing or shorter than 16 characters. Token mode then fails closed. */
+export function sessionSecret(env: { AUTH_SESSION_SECRET?: string }): string | null {
+  const secret = env.AUTH_SESSION_SECRET ?? "";
+  return secret.length >= MIN_SECRET ? secret : null;
+}
+
+/**
+ * Login token → email. The raw token is hashed and compared with ui_login_tokens.token_hash.
+ * The email must be on UI_ALLOWED_EMAILS. Nothing here writes the raw token.
+ */
+export async function authenticateLoginToken(db: D1Database, token: string, allowList: string | undefined, now = Date.now()): Promise<string | null> {
+  const computed = await sha256Hex(LOGIN_TOKEN.test(token) ? token : `invalid:${token.length}`);
+  if (!LOGIN_TOKEN.test(token)) {
+    timingSafeEqualStr(computed, computed);
+    return null;
+  }
+  const row = await db.prepare(
+    `SELECT token_hash, email FROM ui_login_tokens
+     WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`,
+  ).bind(computed, now).first<{ token_hash: string; email: string }>();
+  if (!row?.token_hash || !timingSafeEqualStr(computed, row.token_hash)) {
+    timingSafeEqualStr(computed, row?.token_hash ?? computed);
+    return null;
+  }
+  const email = row.email.trim().toLowerCase();
+  if (!email || !emailAllowed(allowList, email)) return null;
+  return email;
+}
+
+function b64urlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function hmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+
+async function signSession(secret: string, sid: string, expSec: number): Promise<string> {
+  const payload = b64urlEncode(enc.encode(JSON.stringify({ v: 1, sid, exp: expSec })));
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload)));
+  return `${payload}.${b64urlEncode(sig)}`;
+}
+
+function readCookie(req: Request, name: string): string | null {
+  const raw = req.headers.get("cookie");
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("=");
+    if (i === -1) continue;
+    if (part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return null;
+}
+
+async function sessionIdFromCookie(req: Request, secret: string, nowSec: number): Promise<string | null> {
+  const raw = readCookie(req, SESSION_COOKIE);
+  if (!raw) return null;
+  const dot = raw.indexOf(".");
+  if (dot <= 0) return null;
+  const payload = raw.slice(0, dot);
+  let sig: Uint8Array;
+  try { sig = b64urlDecode(raw.slice(dot + 1)); } catch { return null; }
+  const ok = await crypto.subtle.verify("HMAC", await hmacKey(secret), sig, enc.encode(payload));
+  if (!ok) return null;
+  try {
+    const body = JSON.parse(new TextDecoder().decode(b64urlDecode(payload))) as { v?: unknown; sid?: unknown; exp?: unknown };
+    if (body.v !== 1 || typeof body.sid !== "string" || typeof body.exp !== "number") return null;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.sid)) return null;
+    if (body.exp < nowSec) return null;
+    return body.sid;
+  } catch {
+    return null;
+  }
+}
+
+function cookieHeader(value: string, maxAge: number): string {
+  return `${SESSION_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+}
+
+export function clearSessionCookie(): string {
+  return cookieHeader("", 0);
+}
+
+/** Insert a server-side session and return the Set-Cookie header. Logout revokes the row. */
+export async function openSession(db: D1Database, email: string, secret: string, ttlSeconds: number, now = Date.now()): Promise<string> {
+  const sid = crypto.randomUUID();
+  const expMs = now + ttlSeconds * 1000;
+  await db.prepare(
+    "INSERT INTO ui_sessions (id, email, expires_at, created_at, revoked_at) VALUES (?, ?, ?, ?, NULL)",
+  ).bind(sid, email, expMs, now).run();
+  const value = await signSession(secret, sid, Math.floor(expMs / 1000));
+  return cookieHeader(value, ttlSeconds);
+}
+
+/** Verified session email, or null. Allow-list is checked again so a removed email loses access. */
+export async function sessionEmail(db: D1Database, req: Request, env: AuthEnv, now = Date.now()): Promise<string | null> {
+  const secret = sessionSecret(env);
+  if (!secret) return null;
+  const sid = await sessionIdFromCookie(req, secret, Math.floor(now / 1000));
+  if (!sid) return null;
+  const row = await db.prepare(
+    "SELECT email, expires_at, revoked_at FROM ui_sessions WHERE id = ?",
+  ).bind(sid).first<{ email: string; expires_at: number; revoked_at: number | null }>();
+  if (!row || row.revoked_at != null || row.expires_at <= now) return null;
+  const email = row.email.trim().toLowerCase();
+  if (!emailAllowed(env.UI_ALLOWED_EMAILS, email)) return null;
+  return email;
+}
+
+export async function revokeSession(db: D1Database, req: Request, env: AuthEnv, now = Date.now()): Promise<void> {
+  const secret = sessionSecret(env);
+  if (!secret) return;
+  const sid = await sessionIdFromCookie(req, secret, Math.floor(now / 1000));
+  if (!sid) return;
+  await db.prepare("UPDATE ui_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, sid).run();
+}
+
 /**
  * Author of a leadership note, taken only from the verified UI session.
  * Null when the email is not listed in LEADERSHIP_AUTHORS.
@@ -116,9 +274,7 @@ export async function verifyAccessJwt(req: Request, env: AccessEnv): Promise<str
     if (!aud.includes(env.ACCESS_AUD)) return null;
     if (env.ACCESS_TEAM_DOMAIN && payload.iss !== `https://${env.ACCESS_TEAM_DOMAIN}`) return null;
     const email = String(payload.email ?? "").toLowerCase();
-    if (!email) return null;
-    const allow = (env.UI_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-    if (!allow.includes(email)) return null;
+    if (!email || !emailAllowed(env.UI_ALLOWED_EMAILS, email)) return null;
     return email;
   } catch {
     return null;
