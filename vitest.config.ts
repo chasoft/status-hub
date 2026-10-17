@@ -1,7 +1,7 @@
 import path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Throwaway RSA key so tests can mint Cloudflare-Access-shaped JWTs.
 const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -34,5 +34,9 @@ export default defineConfig({
       },
     })),
   ],
-  test: { setupFiles: ["./test/apply-migrations.ts"] },
+  test: {
+    setupFiles: ["./test/apply-migrations.ts"],
+    // Node script tests use vitest.node.config.mjs. The Workers pool has no filesystem.
+    exclude: [...configDefaults.exclude, "test/setup/**"],
+  },
 });

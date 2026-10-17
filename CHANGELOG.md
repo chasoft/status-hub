@@ -9,6 +9,7 @@ All notable changes to Status Hub are documented in this file. The project follo
 - `AUTH_MODE=token`: a login page, SHA-256 login tokens in D1 (`ui_login_tokens`), and a signed `HttpOnly` `Secure` `SameSite=Lax` session cookie with logout. `AUTH_MODE=access` is unchanged. `magic-link` is not available.
 - `pnpm run ui-login` (`scripts/gen-ui-login.mjs`) mints a UI login token locally and prints the SQL for the hash.
 - Migration `0008_ui_login.sql`.
+- `pnpm run setup` creates or reuses the D1 database (and optional staging), writes gitignored `wrangler.local.jsonc`, applies migrations, creates the first admin, and prints a one-time MCP token. `pnpm run deploy` deploys that local config. Flags and `STATUS_HUB_*` variables cover the same prompts for CI. With `--auth-mode token`, setup runs `wrangler secret put AUTH_SESSION_SECRET` using a generated value and prints a one-time UI login token for the admin email. Only the SHA-256 is stored.
 
 ## 0.1.0 - 2026-10-17
 

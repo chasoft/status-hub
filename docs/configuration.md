@@ -2,9 +2,125 @@
 
 Status Hub reads deployment settings from Worker environment variables. The active config is deployment-wide: every request in an isolate sees the same values. Request data cannot change them.
 
-Committed defaults live in [wrangler.jsonc](../wrangler.jsonc). Replace the `example.com` placeholders, the Access application values, and the D1 `database_id` before you deploy. Do not commit a real account id, API token, or bot token.
+Committed defaults live in [wrangler.jsonc](../wrangler.jsonc). `pnpm run setup` copies them into gitignored `wrangler.local.jsonc` and fills the hostnames, org name, timezone, allowlists, and D1 `database_id`. Do not commit a real account id, API token, bot token, or `wrangler.local.jsonc`.
 
 UI authentication is `AUTH_MODE`, described in [UI authentication](#ui-authentication). MCP always requires a bearer token. See [Security](../SECURITY.md).
+
+## Setup
+
+`pnpm run setup` is idempotent.
+
+1. It runs `wrangler whoami`. Log in with `pnpm exec wrangler login`, or set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+2. It creates each requested D1 database, or reuses one that already has that name. Production defaults to `status-hub`. Staging is optional and defaults to `status-hub-staging`.
+3. It writes `wrangler.local.jsonc` from the committed template, or from the existing local file when you run it again. A run without `--staging` leaves an existing staging section unchanged.
+4. It applies `migrations/` to each database it provisioned.
+5. It inserts the first admin (`role = admin`, `is_admin = 1`) or updates that member's name and admin flag. It prints one MCP token per database and stores only the SHA-256. A later run does not rotate that token unless you pass `--rotate-token`.
+6. It sets `TZ_OFFSET_MINUTES` and the `settings.tz_offset_minutes` row. A named timezone is converted to the offset in effect at setup time.
+7. It asks for `AUTH_MODE` (`access` or `token`). The default is `access`. `magic-link` is rejected.
+8. When the mode is `token`, it runs `wrangler secret put AUTH_SESSION_SECRET` with a generated value (at least 16 characters) and inserts a UI login token for the admin email into `ui_login_tokens`. Stdout shows that `shu_` token once. The raw token and the session secret are not written to `wrangler.local.jsonc`. A later run keeps an existing secret and an existing login token unless you pass `--rotate-session-secret` or `--rotate-ui-token`. `wrangler secret put` uploads the secret onto the Worker and creates a draft script if the Worker does not exist yet. `pnpm run deploy` publishes the real script and keeps the secret. Staging gets its own secret and its own login token.
+
+The admin email replaces `you@example.com` in `UI_ALLOWED_EMAILS`, `UI_MEMBER_EMAILS` (`email=memberId`), and `LEADERSHIP_AUTHORS` (`email=Display Name`). Other addresses already in those lists are kept.
+
+`pnpm run deploy` deploys `wrangler.local.jsonc`. If that file is missing it falls back to `wrangler.jsonc` and says so. `pnpm run deploy:staging` is the same command with `--env staging`.
+
+### Interactive
+
+```bash
+pnpm exec wrangler login
+pnpm run setup
+pnpm run deploy
+```
+
+Prompts: org name, timezone, UI hostname, MCP hostname, owner ids, approver ids, first admin id, name, and email, UI auth mode, then (for `access` only) optional Access team domain and AUD tag. Staging is a yes/no question. Hostnames have no scheme, port, or path. The UI and MCP hostnames must differ. Admin ids match `^[a-z0-9-]{1,32}$`. Press Enter on the auth-mode prompt to keep `access`.
+
+Timezone values:
+
+| Input | Meaning |
+|---|---|
+| `UTC`, `GMT`, `Z` | `0` |
+| `America/Los_Angeles` | IANA zone, using the current offset |
+| `+08:00`, `-05:30`, `+5`, `-8` | Clock offset. A signed one- or two-digit number is hours. |
+| `-300`, `480` | Minutes east of UTC |
+
+### Non-interactive
+
+`--yes`, `--non-interactive`, `STATUS_HUB_NONINTERACTIVE=1`, or a non-empty `CI` variable skips prompts. In that mode the org, timezone, both hostnames, and the admin id, name, and email are required. Flags override environment variables. `--dry-run` prints the config and does not call Cloudflare or write a file.
+
+```bash
+pnpm run setup -- --yes \
+  --org "Acme" \
+  --timezone UTC \
+  --ui-host status.acme.example \
+  --mcp-host mcp.acme.example \
+  --owner-ids ada,bob \
+  --approver-ids cara \
+  --admin-id ada \
+  --admin-name "Ada Lovelace" \
+  --admin-email ada@acme.example \
+  --auth-mode access \
+  --access-team-domain acme.cloudflareaccess.com \
+  --access-aud "<aud-tag>"
+```
+
+Token mode:
+
+```bash
+pnpm run setup -- --yes \
+  --org "Acme" \
+  --timezone UTC \
+  --ui-host status.acme.example \
+  --mcp-host mcp.acme.example \
+  --admin-id ada \
+  --admin-name "Ada Lovelace" \
+  --admin-email ada@acme.example \
+  --auth-mode token
+```
+
+Staging:
+
+```bash
+pnpm run setup -- --yes --staging \
+  --org "Acme" \
+  --timezone Asia/Kolkata \
+  --ui-host status.acme.example \
+  --mcp-host mcp.acme.example \
+  --admin-id ada \
+  --admin-name "Ada Lovelace" \
+  --admin-email ada@acme.example \
+  --staging-ui-host status-staging.acme.example \
+  --staging-mcp-host mcp-staging.acme.example
+pnpm run deploy:staging
+```
+
+| Flag | Environment variable | Notes |
+|---|---|---|
+| `--yes`, `--non-interactive` | `STATUS_HUB_NONINTERACTIVE=1` | Do not prompt. `CI` also does this. |
+| `--dry-run` | `STATUS_HUB_DRY_RUN=1` | Print only. |
+| `--skip-login-check` | `STATUS_HUB_SKIP_LOGIN=1` | Skip `wrangler whoami`. |
+| `--rotate-token` | `STATUS_HUB_ROTATE_TOKEN=1` | Replace a stored admin token. |
+| `--staging` / `--no-staging` | `STATUS_HUB_STAGING=1` or `0` | Provision staging, or leave it unchanged. |
+| `--org` | `STATUS_HUB_ORG_NAME` | UI header. Required when not prompting. |
+| `--timezone` | `STATUS_HUB_TIMEZONE` | See the table above. Required when not prompting. |
+| `--ui-host` | `STATUS_HUB_UI_HOST` | Required when not prompting. |
+| `--mcp-host` | `STATUS_HUB_MCP_HOST` | Required when not prompting. |
+| `--owner-ids` | `STATUS_HUB_OWNER_IDS` | Comma-separated. Empty is allowed. |
+| `--approver-ids` | `STATUS_HUB_APPROVER_IDS` | Comma-separated. Empty is allowed. |
+| `--admin-id` | `STATUS_HUB_ADMIN_ID` | Required when not prompting. |
+| `--admin-name` | `STATUS_HUB_ADMIN_NAME` | Required when not prompting. |
+| `--admin-email` | `STATUS_HUB_ADMIN_EMAIL` | Required when not prompting. |
+| `--auth-mode` | `STATUS_HUB_AUTH_MODE` | `access` (default) or `token`. |
+| `--rotate-ui-token` | `STATUS_HUB_ROTATE_UI_TOKEN=1` | Mint another UI login token for the admin email. |
+| `--rotate-session-secret` | `STATUS_HUB_ROTATE_SESSION_SECRET=1` | Replace `AUTH_SESSION_SECRET`. Existing browsers must sign in again. |
+| `--database-name` | `STATUS_HUB_DATABASE_NAME` | Default `status-hub`, or the name already in the local file. |
+| `--staging-ui-host` | `STATUS_HUB_STAGING_UI_HOST` | Required with `--staging`. |
+| `--staging-mcp-host` | `STATUS_HUB_STAGING_MCP_HOST` | Required with `--staging`. |
+| `--staging-database-name` | `STATUS_HUB_STAGING_DATABASE_NAME` | Default `status-hub-staging`. |
+| `--access-team-domain` | `STATUS_HUB_ACCESS_TEAM_DOMAIN` | Optional. Omitted keeps the current value. |
+| `--access-aud` | `STATUS_HUB_ACCESS_AUD` | Optional. Empty denies the UI. |
+| `--config` | `STATUS_HUB_CONFIG` | Template. Default `wrangler.jsonc`. |
+| `--out` | `STATUS_HUB_OUT` | Output. Default `wrangler.local.jsonc`. |
+
+`pnpm run setup -- --help` prints the same list.
 
 ## Variables
 
@@ -70,6 +186,8 @@ npx wrangler secret put AUTH_SESSION_SECRET
 pnpm run ui-login you@example.com
 ```
 
+`pnpm run setup -- --auth-mode token` does this for the first admin email: it generates `AUTH_SESSION_SECRET`, passes it to `wrangler secret put` on stdin, and inserts the login-token hash itself. You do not paste the secret or run the SQL. Further emails still use the commands above.
+
 `pnpm run ui-login` runs `node scripts/gen-ui-login.mjs`. Use `run`. Plain `pnpm ui-login` is a different command. Stdout is the raw token: `shu_` plus 32 random bytes, base64url-encoded. Stderr is a `wrangler d1 execute` statement that inserts the id, the hex SHA-256, the lowercased email, and `created_at`. The SQL does not contain the raw token. Run that statement. Deliver the raw token as a secret. Do not commit it.
 
 A second run inserts another row for the same email. Both tokens work until revoked or expired. The script leaves `expires_at` NULL, which means the login token does not expire. Set `expires_at` to epoch milliseconds if you want a deadline. That deadline blocks new sessions only. A session that already exists keeps the expiry it was given at login, until logout revokes it.
@@ -117,9 +235,14 @@ UPDATE ui_sessions SET revoked_at = 1710000000000 WHERE email = 'you@example.com
 The alert variables are unset in staging as well, so staging uses its own `settings` table after migrations. `AUTH_SESSION_SECRET` is not a var. Set it with `wrangler secret put AUTH_SESSION_SECRET --env staging` when staging uses `AUTH_MODE=token`. Custom domains, `workers_dev: false`, `preview_urls: false`, and the `*/5 * * * *` cron are set again on the staging env.
 
 ```bash
-pnpm db:migrate:staging
-pnpm deploy:staging
+# Add the production flags from the non-interactive example (--org, --timezone, hosts, admin).
+pnpm run setup -- --yes --staging \
+  --staging-ui-host status-staging.example.com \
+  --staging-mcp-host mcp-staging.example.com
+pnpm run deploy:staging
 ```
+
+`pnpm db:migrate:staging` applies later migration files to the staging database named in `wrangler.local.jsonc`.
 
 `pnpm run token <member-id> staging` prints a hash command for the staging database.
 
@@ -137,13 +260,13 @@ These are Wrangler settings, not Worker env vars.
 | `preview_urls` | `false` | Leave off, for the same reason. |
 | `routes` | `status.example.com`, `mcp.example.com`, both `custom_domain: true` | Your two hostnames. Each must match `UI_HOST` or `MCP_HOST`. |
 | `d1_databases[0].binding` | `DB` | The code reads `env.DB`. |
-| `d1_databases[0].database_name` | `status-hub` | The name you passed to `wrangler d1 create`. |
-| `d1_databases[0].database_id` | `00000000-0000-0000-0000-000000000000` | Placeholder. Replace it with the id from `wrangler d1 create status-hub`. |
+| `d1_databases[0].database_name` | `status-hub` | Setup reuses or creates this name. Override with `--database-name`. |
+| `d1_databases[0].database_id` | `00000000-0000-0000-0000-000000000000` | Placeholder in git. Setup writes the real id into `wrangler.local.jsonc`. |
 | `d1_databases[0].migrations_dir` | `migrations` | Leave it. |
 | `triggers.crons` | `*/5 * * * *` | Alert cron. Running it twice does not duplicate an open alert. |
 | `observability` | logs, invocation logs, and traces enabled | Worker logs and traces for this script. |
-| Staging `database_name` | `status-hub-staging` | Create this database before `pnpm db:migrate:staging`. |
-| Staging `database_id` | `00000000-0000-0000-0000-000000000001` | Placeholder. Replace it with the staging database id. |
+| Staging `database_name` | `status-hub-staging` | Created or reused when setup runs with `--staging`. |
+| Staging `database_id` | `00000000-0000-0000-0000-000000000001` | Placeholder in git. Setup writes the real id into `wrangler.local.jsonc`. |
 
 ## Settings table
 
@@ -183,13 +306,13 @@ Do not rename `0001` through `0008`. Add a new schema change as the next number,
 
 ## Members and tokens
 
-There is no MCP tool that creates a member. Insert one after migrate. Member ids used by bot tokens match `^[a-z0-9-]{1,32}$`. Roles allowed by the schema are `admin`, `pm`, `po`, `lead`, `dev`, `qa`, `design`, `content`, `seo`, `sales`, `social`, and `data`. `is_admin = 1` grants admin authority even when `role` is something else.
+There is no MCP tool that creates a member. `pnpm run setup` inserts the first admin and prints that member's token. Further members are inserted after migrate. Member ids used by bot tokens match `^[a-z0-9-]{1,32}$`. Roles allowed by the schema are `admin`, `pm`, `po`, `lead`, `dev`, `qa`, `design`, `content`, `seo`, `sales`, `social`, and `data`. `is_admin = 1` grants admin authority even when `role` is something else.
 
 ```bash
 NOW=$(node -e 'console.log(Date.now())')
-npx wrangler d1 execute status-hub --remote --command \
-  "INSERT INTO members (id, name, role, is_admin, created_at) VALUES ('admin', 'Board admin', 'admin', 1, $NOW)"
-pnpm run token admin
+pnpm exec wrangler d1 execute status-hub --remote --config wrangler.local.jsonc --command \
+  "INSERT INTO members (id, name, role, is_admin, created_at) VALUES ('dev1', 'Dev One', 'dev', 0, $NOW)"
+pnpm run token dev1
 ```
 
 `pnpm run token` runs `node scripts/gen-token.mjs`. Use `run`. Plain `pnpm token` is a different command and does not mint a Status Hub token. The script prints the raw token on stdout and, on stderr, a `wrangler d1 execute` statement that stores the SHA-256 in `members.token_hash`. Run that statement. A later hash replaces the previous one. There is one hash column per member.
