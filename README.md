@@ -8,7 +8,7 @@ Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 
 ## Features
 
-- **Kanban by status, with a project filter.** Columns are statuses. Rows are projects. Filter by project, member, or status.
+- **Dashboard by status and project.** Columns are statuses. Rows are projects. A project list and a quick switcher choose one swimlane or all of them. Filter by member, status, or search. Cards open in a drawer. The board polls itself instead of reloading the page.
 - **Project, module, feature, and task codes.** Feature and task numbers are allocated inside one `db.batch()`, so two creates at the same time cannot take the same code.
 - **Pending approval.** A task waits in `pending_approval` until an admin approves or rejects it.
 - **Reviewer.** A move to `review` names an active member as reviewer when the task does not have one yet.
@@ -18,22 +18,25 @@ Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 
 The lifecycle is in [docs/workflow.md](docs/workflow.md). Every environment variable is in [docs/configuration.md](docs/configuration.md).
 
-![Placeholder for a screenshot of the Kanban board](docs/images/kanban-placeholder.png)
+![Board in light mode, with collapsed project rows and a task drawer open](docs/images/board-light.png)
 
-*Screenshot placeholder. After you deploy, replace `docs/images/kanban-placeholder.png` with a capture of your board.*
+![Board in dark mode, with collapsed project rows and a task drawer open](docs/images/board-dark.png)
 
-The board is server-rendered HTML and refreshes every 60 seconds. Times use the configured timezone offset (UTC by default).
+The board fills the viewport. On a desktop the page itself does not scroll: each column scrolls, and so does the task drawer. With more than three projects, All projects starts with the swimlanes collapsed. `?project=CODE` keeps one project. The choice is stored in the browser. A task click opens a drawer; `/t/:code` remains the full page when you open it directly or without JavaScript. Create task, filters, and confirmations stay in dialogs and popovers. Links to another site open in a new tab.
+
+`GET /api/board` returns the filtered board as JSON for the signed-in UI. The page polls it every 60 seconds and updates cards without closing the drawer or jumping the columns. Times use the configured timezone offset (UTC by default). The colors follow `prefers-color-scheme`.
 
 | Path | Page |
 |---|---|
-| `/` | Kanban. The Done column lists the 10 newest done tasks and links to the full list. |
+| `/` | Board. Columns are statuses, rows are projects. The Done column lists the 10 newest done tasks and links to the full list. |
+| `/api/board` | Read-only JSON for the same filters. Requires the same UI login as the board. |
 | `/done` | Every done task for the current project and member filters. |
-| `/new` | Create-task form. |
+| `/new` | Create-task form. The board also opens this form in a dialog. |
 | `/alerts` | Open alerts and blockers. |
 | `/members` | Active members, roles, and whether a token hash is stored. |
 | `/m/:id` | One member and their open tasks. |
 | `/p/:code` | One project, its modules, and its features. |
-| `/t/:code` | One task: request, reviewer, blockers, time in each status, history, leadership feedback, and the pull-request URL. |
+| `/t/:code` | One task: request, reviewer, blockers, time in each status, history, leadership feedback, and the pull-request URL. From the board this opens as a drawer. |
 
 The UI hostname authenticates with `AUTH_MODE`. `access` (the default) expects a Cloudflare Access JWT, which the Worker verifies again, and checks an email allowlist. `token` serves a login page instead of Access. The MCP hostname serves only `/mcp` and always uses a bearer token. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
 

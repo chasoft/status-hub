@@ -6,6 +6,7 @@ import {
 } from "./auth";
 import { configFromEnv, useHubConfig, type ConfigEnv } from "./config";
 import { addLeadershipFeedback, AppError, createTaskFromUi, runChecks, updateTask, type Status } from "./core";
+import { DASHBOARD_JS } from "./dashboard-client";
 import { createServer } from "./mcp";
 import * as ui from "./ui";
 
@@ -16,13 +17,17 @@ export interface Env extends AuthEnv, ConfigEnv {
 }
 
 const SEC_HEADERS = {
-  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
 };
 
 const text = (status: number, body: string) => new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...SEC_HEADERS } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...SEC_HEADERS },
+});
 
 /**
  * CSRF guard for UI form POSTs. Browsers send Sec-Fetch-Site on every request and
@@ -205,6 +210,16 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
     return postTaskPr(req, env, posted[1], email);
   }
   if (req.method !== "GET") return text(405, "Method not allowed");
+  if (path === "/assets/dashboard.js") {
+    return new Response(DASHBOARD_JS, {
+      headers: {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }
+  if (path === "/api/board") return json(await ui.boardJson(env.DB, url));
   let m: RegExpMatchArray | null;
   let out: string | null = null;
   if (path === "/new") out = await ui.renderNewTask(env.DB, email);
@@ -212,7 +227,13 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
   else if (path === "/done") out = await ui.renderDone(env.DB, url, email);
   else if (path === "/alerts") out = await ui.renderAlerts(env.DB, email);
   else if (path === "/members") out = await ui.renderMembers(env.DB, email);
-  else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)$/))) out = await ui.renderTask(env.DB, m[1], email);
+  else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)$/))) {
+    if (url.searchParams.has("fragment")) {
+      const frag = await ui.renderTaskFragment(env.DB, m[1], email);
+      return frag ? html(frag) : text(404, "Not found");
+    }
+    out = await ui.renderTask(env.DB, m[1], email);
+  }
   else if ((m = path.match(/^\/p\/([A-Z]{2,5})$/))) out = await ui.renderProject(env.DB, m[1], email);
   else if ((m = path.match(/^\/m\/([a-z0-9-]{1,32})$/))) out = await ui.renderMember(env.DB, m[1], email);
   return out ? html(out) : text(404, "Not found");

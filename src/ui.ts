@@ -1,4 +1,4 @@
-// Server-rendered HTML UI (no JS framework). Auto-refresh 60s in the browser; no AI tokens.
+// Server-rendered dashboard. Behaviour lives in /assets/dashboard.js (no inline handlers).
 import { leadershipAuthor } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
 import { loadSettings, STATUSES, formatDuration, summarizePeriods, type PeriodRow, type Status } from "./core";
@@ -30,10 +30,6 @@ function tzLabel(offsetMinutes: number): string {
   return m ? `UTC${sign}${h}:${String(m).padStart(2, "0")}` : `UTC${sign}${h}`;
 }
 
-async function clock(db: D1Database): Promise<number> {
-  return (await loadSettings(db)).tz_offset_minutes;
-}
-
 const STATUS_LABEL: Record<Status, string> = {
   pending_approval: "Pending approval", backlog: "Backlog", assigned: "Assigned", in_progress: "In progress", review: "Review",
   blocked: "Blocked", done: "Done", cancelled: "Cancelled",
@@ -42,163 +38,358 @@ const BOARD_COLS: Status[] = ["pending_approval", "backlog", "assigned", "in_pro
 const RULE_LABEL: Record<string, string> = {
   NOT_STARTED: "Not started", STALE: "Stale", BLOCKED_LONG: "Blocked too long", OVERDUE: "Overdue",
 };
+const AVATAR_COLORS = ["#0e6b4f", "#1d4e89", "#6b3fa0", "#8a5a12", "#a33b32", "#0f6e6e", "#3d5a80"];
+const DONE_PREVIEW = 10;
 
-const CSS = `
-:root{--bg:#f6f7f9;--card:#fff;--bd:#dfe3e8;--tx:#1d2733;--mut:#677788}
-*{box-sizing:border-box}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx)}
-header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:#14324a;color:#fff;flex-wrap:wrap}
-header a{color:#cfe3f5;text-decoration:none}header b{font-size:16px}
-main{padding:12px 16px}a{color:#1565c0}
-form.f{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}select,button{padding:4px 8px}
-.board{display:grid;grid-template-columns:110px repeat(7,minmax(180px,1fr));gap:6px;overflow-x:auto;min-width:1100px}
-.colh{font-weight:600;padding:6px;background:#e9edf2;border-radius:6px;position:sticky;top:0}
-.lane{font-weight:700;padding:6px;align-self:start}
-.lane small{display:block;font-weight:400;color:var(--mut)}
-.cell{background:#eef1f4;border-radius:6px;padding:4px;min-height:40px}
-.card{display:block;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--s);border-radius:6px;padding:6px;margin:4px 0;color:inherit;text-decoration:none}
-.card:hover{box-shadow:0 1px 4px #0002}.code{font:12px ui-monospace,monospace;color:var(--mut)}
-.meta{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-top:4px}
-.badge{display:inline-block;padding:1px 6px;border-radius:9px;font-size:11px;color:#fff;background:var(--s)}
-.dur{font-size:11px;color:var(--mut);white-space:nowrap}
-.flag{font-size:11px;font-weight:700;color:#c62828}.flag.y{color:#b26a00}
-.s-pending_approval{--s:#fb8c00}.s-backlog{--s:#90a4ae}.s-assigned{--s:#5c6bc0}.s-in_progress{--s:#1e88e5}.s-review{--s:#8e24aa}.s-blocked{--s:#e53935}.s-done{--s:#43a047}.s-cancelled{--s:#757575}
-.alerts{background:#fff3f3;border:1px solid #f5c2c2;border-radius:6px;padding:8px 12px;margin-bottom:12px}
-.lead{background:#fff3f3;box-shadow:inset 3px 0 #b26a00}
-table{border-collapse:collapse;width:100%;background:#fff}td,th{border-bottom:1px solid var(--bd);padding:6px;text-align:left;vertical-align:top}
-@media (max-width:700px){.board{min-width:900px}}
-`;
+const EXT_ICON = `<svg class="ext" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 2.5H2.5v7h7V7.5M6.5 2.5h3v3M9.5 2.5 5.5 6.5"/></svg>`;
 
-function page(title: string, body: string, email: string, offsetMinutes: number) {
-  const org = getHubConfig().orgName;
-  const logout = getHubConfig().authMode === "token"
-    ? `<form method="post" action="/logout" style="margin:0"><button type="submit">Log out</button></form>`
-    : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>${esc(title)} · Status Hub</title><style>${CSS}</style></head><body>
-<header><b>${esc(org)}</b><a href="/">Kanban</a><a href="/new">New task</a><a href="/alerts">Alerts</a><a href="/members">Members</a>
-<span style="margin-left:auto;font-size:12px;opacity:.8">${esc(email)} · ${tzLabel(offsetMinutes)} · auto-refresh 60s</span>${logout}</header>
-<main>${body}</main></body></html>`;
+/** Absolute http(s) links leave the UI host. Internal paths stay in this tab. */
+export function externalAnchor(href: string, label?: string): string {
+  return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label ?? href)}<span class="ext-icon">${EXT_ICON}<span class="sr"> (opens in a new tab)</span></span></a>`;
 }
 
-export function renderLogin(error?: string, next?: string): string {
-  const org = getHubConfig().orgName;
-  const nextField = next ? `<input type="hidden" name="next" value="${esc(next)}">` : "";
-  const err = error ? `<p class="flag">${esc(error)}</p>` : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Log in · Status Hub</title><style>${CSS}</style></head><body>
-<header><b>${esc(org)}</b></header>
-<main><h2>Log in</h2>${err}
-<form method="post" action="/login">${nextField}
-<p><label>Login token<br><input type="password" name="token" autocomplete="current-password" required></label></p>
-<button type="submit">Log in</button></form>
-<p>Ask an operator for a login token. The token is stored only as a hash.</p>
-</main></body></html>`;
+function linkList(json: string | null): string {
+  if (!json) return "";
+  let urls: unknown;
+  try { urls = JSON.parse(json); } catch { return ""; }
+  if (!Array.isArray(urls)) return "";
+  return urls.filter((u): u is string => typeof u === "string" && u.length > 0).map((u) => externalAnchor(u)).join("<br>");
+}
+
+const CSS = `
+:root {
+  color-scheme: light;
+  --bg:#efece4; --top:#1c2430; --top-ink:#f6f3ec; --card:#fffcf7; --sidebar:#f7f4ee;
+  --bd:#ddd6c8; --tx:#1c1915; --mut:#6d675e; --accent:#0e6b4f; --accent-ink:#f4fffb;
+  --cell:#e7e2d6; --shadow:0 10px 28px #1c19151a; --scrollbar:#c4bbaa; --danger:#a33b32;
+  --warn:#8a5a12; --pill:#f4efe4; --focus:#0e6b4f; --label:168px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg:#10141b; --top:#0c1016; --top-ink:#f3eee4; --card:#1a212c; --sidebar:#141a23;
+    --bd:#2c3544; --tx:#ece7dc; --mut:#a39c90; --accent:#3dbe96; --accent-ink:#06281c;
+    --cell:#151b24; --shadow:0 12px 32px #000a; --scrollbar:#3d4756; --danger:#f07167;
+    --warn:#e6b15c; --pill:#243041; --focus:#3dbe96;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--tx)}
+body.app{height:100dvh;overflow:hidden}
+.shell{height:100%;display:flex;flex-direction:column;min-height:0}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:8px}
+button{cursor:pointer}
+button:hover,summary:hover{border-color:var(--accent)}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.skip{position:absolute;left:8px;top:-40px;background:var(--card);padding:6px 10px;z-index:5;border-radius:8px}
+.skip:focus{top:8px}
+.topbar{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--top);color:var(--top-ink);min-height:52px}
+.topbar a{color:var(--top-ink)}
+.org{font-weight:750;letter-spacing:-.02em;font-size:16px;text-decoration:none;margin-right:4px}
+.chip,.user-btn,.btn,.nav-open{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 10px;background:#ffffff14;color:var(--top-ink);border:1px solid #ffffff24;text-decoration:none}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:650}
+.topbar .btn.primary{color:var(--accent-ink)}
+.search{flex:1;min-width:120px;max-width:340px;display:flex}
+.search input{width:100%;border:0;background:#ffffff14;color:var(--top-ink);border-radius:999px;padding:6px 12px}
+.search input::placeholder{color:#ffffff99}
+.user-btn{margin-left:auto}
+.avatar{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:700;flex:none}
+.user-btn .avatar{width:22px;height:22px}
+.count,.proj-alert{display:none;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;align-items:center;justify-content:center}
+.count.is-on,.proj-alert.is-on{display:inline-flex}
+kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:4px;padding:0 4px;opacity:.8}
+.body{flex:1;display:flex;min-height:0;min-width:0}
+.sidebar{width:232px;flex:none;overflow:auto;background:var(--sidebar);border-right:1px solid var(--bd);padding:10px 8px 16px;min-height:0}
+.nav-links,.proj-nav{display:flex;flex-direction:column;gap:2px}
+.nav-label{margin:14px 8px 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.nav-link,.proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;color:var(--tx);text-decoration:none}
+.nav-link.is-current,.proj.is-current{background:var(--cell);font-weight:650}
+.proj-code{font:12px ui-monospace,monospace;width:42px;flex:none}
+.proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-open{color:var(--mut);font-size:12px}
+main{flex:1;min-width:0;min-height:0}
+.page-scroll{overflow:auto;padding:16px 18px 32px}
+.board-main{display:flex;flex-direction:column;overflow:hidden}
+.board-tools{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:8px 12px 0}
+.board-tools button,.page-scroll button,.dialog-body button,.drawer-body button{padding:5px 10px;border-radius:8px}
+.stamp{margin-left:auto;color:var(--mut);font-size:12px}
+#board{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow-x:auto;overflow-y:hidden}
+.colheads,.summary,details.lane>summary,.lane-grid{display:grid;grid-template-columns:var(--label) repeat(var(--cols),minmax(160px,1fr));gap:8px;align-items:stretch}
+.colheads{position:sticky;top:0;z-index:1;padding:8px 12px 4px;background:var(--bg)}
+.colh{font-weight:650;padding:6px 8px;border-radius:8px;background:var(--cell);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.colhead-label{color:var(--mut);font-size:12px;align-self:center}
+.lanes{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}
+details.lane,section.lane{min-height:0;display:flex;flex-direction:column}
+details.lane{flex:0 0 auto}
+details.lane[open],section.lane{flex:1 1 0}
+details.lane>summary,.summary{align-items:center;padding:6px 0;cursor:pointer;list-style:none}
+details.lane>summary::-webkit-details-marker{display:none}
+.lane-label{display:flex;align-items:center;gap:6px;min-width:0}
+.lane-id{font-weight:750}
+.lane-name{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane-count{text-align:center;color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums}
+.chev{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid var(--mut);flex:none}
+details.lane:not([open]) .chev{transform:rotate(-90deg)}
+.lane-grid{flex:1;min-height:0;grid-template-rows:minmax(0,1fr);padding-bottom:8px}
+.cell{background:var(--cell);border-radius:10px;padding:6px;min-height:0;overflow:auto}
+.cell-label{display:none;font-weight:700;margin-bottom:6px}
+.lane-side{display:flex;align-items:flex-start;padding-top:4px}
+.card{display:block;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--s);border-radius:10px;padding:8px;margin:0 0 8px;color:inherit;text-decoration:none;box-shadow:0 1px 0 #0000000a}
+.card:hover{box-shadow:var(--shadow);text-decoration:none}
+.card-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.code{font:12px ui-monospace,monospace;color:var(--mut)}
+.title{display:block;font-weight:650;margin-top:4px}
+.meta{display:flex;justify-content:space-between;gap:8px;color:var(--mut);font-size:12px;margin-top:6px}
+.dur{white-space:nowrap}
+.pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.pill{display:inline-block;padding:1px 6px;border-radius:999px;font-size:11px;font-weight:650;background:var(--pill)}
+.pill-blocker{color:var(--danger)}.pill-alert{color:var(--warn)}.pill-unread{color:#1d4e89}.pill-pr{color:var(--accent)}
+.s-pending_approval{--s:#e07a2f}.s-backlog{--s:#8b93a7}.s-assigned{--s:#5b6ee1}.s-in_progress{--s:#2f7de1}.s-review{--s:#8d4fd6}.s-blocked{--s:#d64545}.s-done{--s:#2f9e62}.s-cancelled{--s:#757575}
+.badge{display:inline-block;padding:1px 6px;border-radius:999px;font-size:11px;color:#fff;background:var(--s)}
+.cancelled{margin-top:8px}
+.cancelled-list{max-height:180px;overflow:auto}
+table{border-collapse:collapse;width:100%;background:var(--card);border-radius:10px;overflow:hidden}
+td,th{border-bottom:1px solid var(--bd);padding:6px 8px;text-align:left;vertical-align:top}
+.lead{background:#fff6ea;box-shadow:inset 3px 0 var(--warn)}
+.flag{color:var(--danger);font-weight:700}
+.muted,.empty{color:var(--mut)}
+.stack p{margin:0 0 10px}
+.stack input,.stack select,.stack textarea,.dialog-body input,.drawer-body textarea{width:100%;max-width:640px;padding:6px 8px}
+.inline{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:6px}
+.ext{vertical-align:-1px;margin-left:3px}
+dialog{border:1px solid var(--bd);border-radius:14px;background:var(--card);color:var(--tx);padding:0;box-shadow:var(--shadow);max-width:min(560px,calc(100vw - 32px))}
+dialog::backdrop{background:#0007}
+dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,100vw);border-radius:0;border-width:0 0 0 1px;max-width:none}
+.dialog-bar,.drawer-bar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--bd)}
+.dialog-bar h2,.drawer-bar h2{margin:0;font-size:16px;flex:1}
+.dialog-body{padding:14px;overflow:auto;max-height:min(70dvh,640px)}
+.drawer-body{overflow:auto;height:calc(100dvh - 54px);padding:14px 16px 28px}
+[popover]{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:12px;box-shadow:var(--shadow);max-width:min(360px,calc(100vw - 24px));max-height:min(70dvh,520px);overflow:auto}
+.quick{list-style:none;margin:8px 0;padding:0}
+.quick a{display:flex;justify-content:space-between;gap:8px;padding:4px 0;color:var(--tx)}
+.row{display:flex;gap:8px;justify-content:flex-end}
+.switcher-list,#switcher-list{list-style:none;margin:8px 0 0;padding:0;max-height:50dvh;overflow:auto}
+#switcher-list a{display:flex;gap:8px;padding:6px 8px;border-radius:8px;color:var(--tx)}
+#switcher-list a.is-active{background:var(--cell)}
+.login-body{min-height:100dvh;overflow:auto;display:grid;place-items:center;padding:24px}
+.login-card{width:min(420px,100%);background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:22px;box-shadow:var(--shadow)}
+.login-card h1{margin:0 0 8px;font-size:22px}
+* {scrollbar-width:thin;scrollbar-color:var(--scrollbar) transparent}
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:8px}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;scroll-behavior:auto !important}}
+@media (max-width:800px){
+  body.app{height:auto;min-height:100dvh;overflow:auto}
+  .shell{height:auto;min-height:100dvh}
+  .body{display:block}
+  .sidebar{width:auto;max-height:none;border-right:0;border-bottom:1px solid var(--bd);overflow:auto}
+  .nav-links{flex-direction:row;flex-wrap:wrap}
+  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell{height:auto;max-height:none;overflow:visible;flex:none}
+  .cell-label{display:block}
+  .colheads{display:none}
+  .summary,details.lane>summary{display:flex;flex-wrap:wrap}
+  .lane-grid{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;grid-template-columns:none;padding-bottom:12px}
+  .cell{min-width:78vw;scroll-snap-align:start;flex:none}
+  .lane-side{display:none}
+  dialog.drawer{width:100vw}
+}
+@media (prefers-color-scheme: dark){
+  .lead{background:#2a2418}
+  .pill-unread{color:#9ec1ff}
+}
+`;
+
+type PageId = "board" | "done" | "alerts" | "members" | "member" | "project" | "task" | "new";
+
+interface Filters {
+  project: string;
+  member: string;
+  status: Status | "";
+  q: string;
+}
+
+interface ProjectNav { code: string; name: string; open_n: number; alert_n: number }
+interface MemberNav { id: string; name: string; open_n: number }
+interface AlertNav { rule: string; n: number }
+interface Chrome {
+  tz: number;
+  projects: ProjectNav[];
+  members: MemberNav[];
+  alerts: AlertNav[];
+  requesters: string[];
+  filters: Filters;
 }
 
 interface CardRow {
   code: string; title: string; status: Status; project_code: string; feature_code: string; feature_title: string;
-  assignee_id: string | null; reviewer_id: string | null; last_update_at: number; alerts: string | null; open_blockers: number; waiting_on: string | null;
-  status_since: number | null;
+  assignee_id: string | null; assignee_name: string | null; reviewer_id: string | null; last_update_at: number;
+  pr_url: string | null; alerts: string | null; open_blockers: number; waiting_on: string | null;
+  status_since: number | null; unread_feedback: number;
 }
 
-function card(c: CardRow, now: number, tz: number) {
-  const al = c.alerts ? c.alerts.split(",") : [];
-  const flags = [
-    ...al.map((r) => `<span class="flag${r === "STALE" ? " y" : ""}">⚠ ${esc(RULE_LABEL[r] ?? r)}</span>`),
-    c.open_blockers ? `<span class="flag">⛔ waiting on ${esc(c.waiting_on)}</span>` : "",
-  ].filter(Boolean).join(" ");
-  const since = c.status_since ?? c.last_update_at;
-  return `<a class="card s-${c.status}" href="/t/${encodeURIComponent(c.code)}" title="${esc(c.feature_code)} · ${esc(c.feature_title)}">
-<div class="code">${esc(c.code)} <span class="badge">${esc(STATUS_LABEL[c.status])}</span> <span class="dur" title="in this status since ${fmt(since, tz)}">${esc(c.status)} · ${formatDuration(now - since)}</span></div>
-<div>${esc(c.title)}</div>${flags ? `<div>${flags}</div>` : ""}
-<div class="meta"><span>👤 ${esc(c.assignee_id ?? "unassigned")}${c.reviewer_id ? ` · reviewer ${esc(c.reviewer_id)}` : ""}</span><span title="${fmt(c.last_update_at, tz)}">⟳ ${ago(c.last_update_at, now)}</span></div></a>`;
+export interface BoardJson {
+  project: string;
+  member: string;
+  status: string;
+  q: string;
+  doneTotal: number;
+  alertTotal: number;
+  alerts: { rule: string; label: string; n: number }[];
+  projects: { code: string; name: string; open: number; alerts: number }[];
+  cards: { code: string; project_code: string; status: string; rev: string; html: string }[];
 }
 
-const DONE_PREVIEW = 10;
-
-function scope(project: string, member: string, where: string[], binds: unknown[]) {
-  if (project) { where.push("t.project_code = ?"); binds.push(project); }
-  if (member) { where.push("t.assignee_id = ?"); binds.push(member); }
+function readFilters(url: URL): Filters {
+  const raw = url.searchParams.get("status") || "";
+  const status = (STATUSES as string[]).includes(raw) ? raw as Status : "";
+  return {
+    project: url.searchParams.get("project") || "",
+    member: url.searchParams.get("member") || "",
+    status,
+    q: (url.searchParams.get("q") || "").trim().slice(0, 80),
+  };
 }
 
-function querySuffix(project: string, member: string): string {
+function withQuery(path: string, pairs: [string, string][]): string {
   const q = new URLSearchParams();
-  if (project) q.set("project", project);
-  if (member) q.set("member", member);
+  for (const [k, v] of pairs) if (v) q.set(k, v);
   const s = q.toString();
-  return s ? `?${s}` : "";
+  return s ? `${path}?${s}` : path;
+}
+
+function boardHref(f: Filters, project = f.project): string {
+  return withQuery("/", [["project", project], ["member", f.member], ["status", f.status], ["q", f.q]]);
+}
+
+function doneHref(f: Filters): string {
+  return withQuery("/done", [["project", f.project], ["member", f.member]]);
+}
+
+function pendingHref(project: string): string {
+  return project ? `/?status=pending_approval&project=${project}` : "/?status=pending_approval";
+}
+
+function hidden(name: string, value: string): string {
+  return value ? `<input type="hidden" name="${name}" value="${esc(value)}">` : "";
+}
+
+function initials(name: string | null, id: string | null): string {
+  const src = (name || id || "?").trim();
+  const parts = src.split(/[\s._-]+/).filter(Boolean);
+  const raw = parts.length >= 2 ? `${parts[0]![0]!}${parts[1]![0]!}` : src.slice(0, 2);
+  return raw.toUpperCase();
+}
+
+function avatarColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]!;
+}
+
+function cardRev(c: CardRow): string {
+  let h = 0;
+  const src = `${c.title}\0${c.alerts ?? ""}\0${c.waiting_on ?? ""}\0${c.pr_url ?? ""}`;
+  for (let i = 0; i < src.length; i++) h = (Math.imul(h, 33) + src.charCodeAt(i)) >>> 0;
+  return [c.status, c.last_update_at, c.status_since ?? 0, c.assignee_id ?? "", c.reviewer_id ?? "", c.open_blockers, c.unread_feedback, h].join(".");
+}
+
+function asCards(rows: unknown[]): CardRow[] {
+  return rows.map((raw) => {
+    const r = raw as CardRow;
+    return {
+      ...r,
+      open_blockers: Number(r.open_blockers) || 0,
+      unread_feedback: Number(r.unread_feedback) || 0,
+      last_update_at: Number(r.last_update_at),
+      status_since: r.status_since == null ? null : Number(r.status_since),
+    };
+  });
 }
 
 const CARD_SQL = `
-SELECT t.code, t.title, t.status, t.project_code, t.feature_code, f.title AS feature_title, t.assignee_id, t.reviewer_id, t.last_update_at,
+SELECT t.code, t.title, t.status, t.project_code, t.feature_code, f.title AS feature_title,
+  t.assignee_id, am.name AS assignee_name, t.reviewer_id, t.last_update_at, t.pr_url,
   (SELECT group_concat(a.rule) FROM alerts a WHERE a.task_code = t.code AND a.cleared_at IS NULL) AS alerts,
   (SELECT COUNT(*) FROM blockers b WHERE b.task_code = t.code AND b.resolved_at IS NULL) AS open_blockers,
   (SELECT b.waiting_on FROM blockers b WHERE b.task_code = t.code AND b.resolved_at IS NULL ORDER BY b.opened_at LIMIT 1) AS waiting_on,
-  (SELECT p.started_at FROM status_periods p WHERE p.task_code = t.code AND p.ended_at IS NULL) AS status_since
-FROM tasks t JOIN features f ON f.code = t.feature_code`;
+  (SELECT p.started_at FROM status_periods p WHERE p.task_code = t.code AND p.ended_at IS NULL) AS status_since,
+  (SELECT COUNT(*) FROM feedback fb WHERE fb.task_code = t.code AND (fb.read_by IS NULL OR fb.read_by != IFNULL(t.assignee_id, ''))) AS unread_feedback
+FROM tasks t
+JOIN features f ON f.code = t.feature_code
+LEFT JOIN members am ON am.id = t.assignee_id`;
 
-export async function renderBoard(db: D1Database, url: URL, email: string, now = Date.now()) {
-  const project = url.searchParams.get("project") || "";
-  const member = url.searchParams.get("member") || "";
-  const statusF = (url.searchParams.get("status") || "") as Status | "";
-  const where: string[] = ["t.status != 'done'"];
-  const binds: unknown[] = [];
-  scope(project, member, where, binds);
-  if (statusF && STATUSES.includes(statusF)) { where.push("t.status = ?"); binds.push(statusF); }
-  const doneWhere = ["t.status = 'done'"];
-  const doneBinds: unknown[] = [];
-  scope(project, member, doneWhere, doneBinds);
-  const showDone = !statusF || statusF === "done";
-  const [cards, projects, members, alertCount, doneCards, doneCount] = await db.batch([
-    db.prepare(`${CARD_SQL} WHERE ${where.join(" AND ")} ORDER BY t.last_update_at DESC LIMIT 1000`).bind(...binds),
-    db.prepare("SELECT code, name FROM projects WHERE status != 'archived' ORDER BY code"),
-    db.prepare("SELECT id, name FROM members WHERE active = 1 ORDER BY id"),
-    db.prepare("SELECT rule, COUNT(*) AS n FROM alerts WHERE cleared_at IS NULL GROUP BY rule"),
-    db.prepare(`${CARD_SQL} WHERE ${doneWhere.join(" AND ")} ORDER BY t.done_at DESC, t.code DESC LIMIT ?`).bind(...doneBinds, DONE_PREVIEW),
-    db.prepare(`SELECT COUNT(*) AS n FROM tasks t WHERE ${doneWhere.join(" AND ")}`).bind(...doneBinds),
-  ]);
-  const tz = await clock(db);
-  const rows = cards.results as unknown as CardRow[];
-  if (showDone) rows.push(...(doneCards.results as unknown as CardRow[]));
-  const doneTotal = Number((doneCount.results[0] as { n: number }).n);
-  const projs = (projects.results as { code: string; name: string }[]).filter((p) => !project || p.code === project);
-  const cols = statusF && statusF !== "cancelled" ? [statusF] : BOARD_COLS;
-  const opt = (v: string, cur: string, label = v) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`;
-
-  const filters = `<form class="f" method="get">
-<select name="project"><option value="">All projects</option>${(projects.results as any[]).map((p) => opt(p.code, project, `${p.code} · ${p.name}`)).join("")}</select>
-<select name="member"><option value="">All members</option>${(members.results as any[]).map((m) => opt(m.id, member, m.name)).join("")}</select>
-<select name="status"><option value="">All statuses</option>${STATUSES.map((s) => opt(s, statusF, STATUS_LABEL[s])).join("")}</select>
-<button>Filter</button><a href="/?status=pending_approval${project ? `&amp;project=${esc(project)}` : ""}">Pending approval</a> <a href="/">Clear</a></form>`;
-
-  const ac = alertCount.results as { rule: string; n: number }[];
-  const alertBar = ac.length
-    ? `<div class="alerts"><b>Open alerts:</b> ${ac.map((a) => `${esc(RULE_LABEL[a.rule] ?? a.rule)}: <b>${a.n}</b>`).join(" · ")} — <a href="/alerts">view</a></div>`
-    : "";
-
-  const doneHref = `/done${querySuffix(project, member)}`;
-  const grid = `<div class="board" style="grid-template-columns:110px repeat(${cols.length},minmax(180px,1fr))">
-<div></div>${cols.map((s) => `<div class="colh s-${s}"><span class="badge">${esc(STATUS_LABEL[s])}</span> ${rows.filter((r) => r.status === s).length}${s === "done" ? ` <a href="${esc(doneHref)}">See all (${doneTotal})</a>` : ""}</div>`).join("")}
-${projs.map((p) => {
-    const pr = rows.filter((r) => r.project_code === p.code);
-    return `<div class="lane"><a href="/p/${esc(p.code)}">${esc(p.code)}</a><small>${esc(p.name)}</small></div>` +
-      cols.map((s) => `<div class="cell">${pr.filter((r) => r.status === s).map((r) => card(r, now, tz)).join("")}</div>`).join("");
-  }).join("")}</div>`;
-
-  const cancelled = rows.filter((r) => r.status === "cancelled" && (!project || r.project_code === project));
-  const cancelledBox = !statusF || statusF === "cancelled"
-    ? `<details style="margin-top:12px"${statusF === "cancelled" ? " open" : ""}><summary>Cancelled (${cancelled.length})</summary>${cancelled.map((r) => card(r, now, tz)).join("")}</details>`
-    : "";
-  return page("Kanban", alertBar + filters + grid + cancelledBox, email, tz);
+function applyScope(filters: Filters, where: string[], binds: unknown[], withStatus: boolean) {
+  if (filters.project) { where.push("t.project_code = ?"); binds.push(filters.project); }
+  if (filters.member) { where.push("t.assignee_id = ?"); binds.push(filters.member); }
+  if (filters.q) {
+    const like = `%${filters.q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    where.push("(t.code LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\' OR f.title LIKE ? ESCAPE '\\')");
+    binds.push(like, like, like);
+  }
+  if (withStatus && filters.status) { where.push("t.status = ?"); binds.push(filters.status); }
 }
 
-export async function renderNewTask(db: D1Database, email: string) {
+async function loadChrome(db: D1Database, url: URL): Promise<Chrome> {
+  const filters = readFilters(url);
+  const [projects, members, alerts, pms] = await db.batch([
+    db.prepare(`SELECT p.code, p.name,
+      (SELECT COUNT(*) FROM tasks t WHERE t.project_code = p.code AND t.status NOT IN ('done','cancelled')) AS open_n,
+      (SELECT COUNT(*) FROM alerts a JOIN tasks t ON t.code = a.task_code WHERE t.project_code = p.code AND a.cleared_at IS NULL) AS alert_n
+      FROM projects p WHERE p.status != 'archived' ORDER BY p.code`),
+    db.prepare(`SELECT m.id, m.name,
+      (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = m.id AND t.status NOT IN ('done','cancelled')) AS open_n
+      FROM members m WHERE m.active = 1 ORDER BY m.name, m.id`),
+    db.prepare("SELECT rule, COUNT(*) AS n FROM alerts WHERE cleared_at IS NULL GROUP BY rule"),
+    db.prepare("SELECT id FROM members WHERE active = 1 AND role = 'pm' ORDER BY id"),
+  ]);
+  const tz = (await loadSettings(db)).tz_offset_minutes;
   const cfg = getHubConfig();
-  const pms = await db.prepare("SELECT id FROM members WHERE active = 1 AND role = 'pm' ORDER BY id").all<{ id: string }>();
-  const requesters = [...new Set([...cfg.ownerIds, ...cfg.approverIds, ...pms.results.map((m) => m.id)])];
-  const tz = await clock(db);
-  return page("New task", `<h2>New task</h2>
-<form method="post" action="/new">
+  const requesters = [...new Set([...cfg.ownerIds, ...cfg.approverIds, ...(pms.results as { id: string }[]).map((m) => m.id)])];
+  return {
+    tz,
+    filters,
+    requesters,
+    projects: (projects.results as ProjectNav[]).map((p) => ({ ...p, open_n: Number(p.open_n) || 0, alert_n: Number(p.alert_n) || 0 })),
+    members: (members.results as MemberNav[]).map((m) => ({ ...m, open_n: Number(m.open_n) || 0 })),
+    alerts: (alerts.results as AlertNav[]).map((a) => ({ rule: a.rule, n: Number(a.n) || 0 })),
+  };
+}
+
+async function loadCards(db: D1Database, filters: Filters): Promise<{ rows: CardRow[]; doneTotal: number }> {
+  const where = ["t.status != 'done'"];
+  const binds: unknown[] = [];
+  applyScope(filters, where, binds, true);
+  const doneWhere = ["t.status = 'done'"];
+  const doneBinds: unknown[] = [];
+  applyScope(filters, doneWhere, doneBinds, false);
+  const showDone = !filters.status || filters.status === "done";
+  const [cards, doneCards, doneCount] = await db.batch([
+    db.prepare(`${CARD_SQL} WHERE ${where.join(" AND ")} ORDER BY t.last_update_at DESC LIMIT 1000`).bind(...binds),
+    db.prepare(`${CARD_SQL} WHERE ${doneWhere.join(" AND ")} ORDER BY t.done_at DESC, t.code DESC LIMIT ?`).bind(...doneBinds, DONE_PREVIEW),
+    db.prepare(`SELECT COUNT(*) AS n FROM tasks t JOIN features f ON f.code = t.feature_code WHERE ${doneWhere.join(" AND ")}`).bind(...doneBinds),
+  ]);
+  const rows = asCards(cards.results);
+  if (showDone) rows.push(...asCards(doneCards.results));
+  return { rows, doneTotal: Number((doneCount.results[0] as { n: number }).n) };
+}
+
+function card(c: CardRow, now: number, tz: number): string {
+  const since = c.status_since ?? c.last_update_at;
+  const who = `👤 ${esc(c.assignee_id ?? "unassigned")}${c.reviewer_id ? ` · reviewer ${esc(c.reviewer_id)}` : ""}`;
+  const pills: string[] = [];
+  if (c.open_blockers) pills.push(`<span class="pill pill-blocker">Blocker${c.waiting_on ? ` · ${esc(c.waiting_on)}` : ""}</span>`);
+  for (const rule of (c.alerts ?? "").split(",").filter(Boolean)) pills.push(`<span class="pill pill-alert">${esc(RULE_LABEL[rule] ?? rule)}</span>`);
+  if (c.unread_feedback) pills.push(`<span class="pill pill-unread">Feedback${c.unread_feedback > 1 ? ` ${c.unread_feedback}` : ""}</span>`);
+  if (c.pr_url) pills.push(`<span class="pill pill-pr">PR</span>`);
+  return `<a class="card s-${c.status}" href="/t/${encodeURIComponent(c.code)}" data-code="${esc(c.code)}" data-rev="${esc(cardRev(c))}" title="${esc(c.feature_code)} · ${esc(c.feature_title)}"><span class="card-top"><span class="code">${esc(c.code)}</span><span class="avatar" style="background:${avatarColor(c.assignee_id || c.assignee_name || "?")}" title="${esc(c.assignee_name || c.assignee_id || "Unassigned")}" aria-hidden="true">${esc(initials(c.assignee_name, c.assignee_id))}</span></span><span class="title">${esc(c.title)}</span><span class="meta"><span class="dur" title="in this status since ${fmt(since, tz)}">${esc(c.status)} · ${formatDuration(Math.max(0, now - since))}</span><span class="who">${who}</span></span>${pills.length ? `<span class="pills">${pills.join("")}</span>` : ""}</a>`;
+}
+
+function newTaskForm(requesters: string[]): string {
+  return `<form method="post" action="/new" class="stack">
 <p><label>Feature<br><input name="feature" required placeholder="PRJ-CORE-001"></label></p>
 <p><label>Title<br><input name="title" required minlength="3"></label></p>
 <p><label>Assignee<br><input name="assignee" placeholder="member id"></label></p>
@@ -207,36 +398,180 @@ export async function renderNewTask(db: D1Database, email: string) {
 <p><label>Requested at (epoch ms)<br><input name="requested_at" inputmode="numeric"></label></p>
 <p><label>Request link<br><input name="request_link" type="url" placeholder="https://"></label></p>
 <button>Create</button></form>
-<p>If requester, time, or link is missing, the task stays in Pending approval. An assignee does not change status by itself.</p>`, email, tz);
+<p class="muted">If requester, time, or link is missing, the task stays in Pending approval. An assignee does not change status by itself.</p>`;
+}
+
+function shell(title: string, main: string, email: string, chrome: Chrome, page: PageId, board: boolean): string {
+  const org = getHubConfig().orgName;
+  const f = chrome.filters;
+  const alertTotal = chrome.alerts.reduce((sum, a) => sum + a.n, 0);
+  const openTotal = chrome.projects.reduce((sum, p) => sum + p.open_n, 0);
+  const alertTotalN = chrome.projects.reduce((sum, p) => sum + p.alert_n, 0);
+  const tokenMode = getHubConfig().authMode === "token";
+  const logout = tokenMode ? `<form method="post" action="/logout" class="logout"><button type="submit">Log out</button></form>` : "";
+  const memberLabel = f.member ? (chrome.members.find((m) => m.id === f.member)?.name || f.member) : "All";
+  const statusLabel = f.status ? STATUS_LABEL[f.status] : "All";
+  const projectLabel = f.project || "All";
+  const nav = (id: PageId | "member", href: string, label: string) => {
+    const on = page === id || (id === "members" && page === "member");
+    return `<a class="nav-link${on ? " is-current" : ""}" href="${esc(href)}"${on ? ' aria-current="page"' : ""}>${label}</a>`;
+  };
+  const allOn = page === "board" && !f.project;
+  const projects = `<div class="proj-nav" role="group" aria-label="Projects">
+<p class="nav-label">Projects</p>
+<a class="proj${allOn ? " is-current" : ""}" href="${esc(boardHref({ ...f, project: "" }, ""))}" data-project-link="" data-nav-project="*"${allOn ? ' aria-current="page"' : ""}><span class="proj-code">All</span><span class="proj-name">All projects</span><span class="proj-open" data-open>${openTotal}</span><span class="proj-alert${alertTotalN ? " is-on" : ""}" data-alerts>${alertTotalN}</span></a>
+${chrome.projects.map((p) => {
+    const on = p.code === f.project;
+    return `<a class="proj${on ? " is-current" : ""}" href="${esc(boardHref(f, p.code))}" data-project-link="${esc(p.code)}" data-nav-project="${esc(p.code)}"${on ? ' aria-current="page"' : ""}><span class="proj-code">${esc(p.code)}</span><span class="proj-name">${esc(p.name)}</span><span class="proj-open" data-open>${p.open_n}</span><span class="proj-alert${p.alert_n ? " is-on" : ""}" data-alerts>${p.alert_n}</span></a>`;
+  }).join("")}
+</div>`;
+  const memberOpts = [`<option value="">All members</option>`, ...chrome.members.map((m) => `<option value="${esc(m.id)}"${m.id === f.member ? " selected" : ""}>${esc(m.name)}</option>`)].join("");
+  const statusOpts = [`<option value="">All statuses</option>`, ...STATUSES.map((s) => `<option value="${s}"${s === f.status ? " selected" : ""}>${esc(STATUS_LABEL[s])}</option>`)].join("");
+  const search = boardSearch(f);
+  const dialogs = `${page === "new" ? "" : `<dialog id="new-task" aria-labelledby="new-task-title"><div class="dialog-bar"><h2 id="new-task-title">New task</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body">${newTaskForm(chrome.requesters)}</div></dialog>`}
+<dialog id="switcher" aria-labelledby="switcher-title"><div class="dialog-bar"><h2 id="switcher-title">Switch project</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body"><input id="switcher-input" type="search" placeholder="Project code or name" aria-label="Filter projects" autocomplete="off"><ul id="switcher-list" role="listbox" aria-label="Projects"></ul><p class="muted">Arrow keys move. Enter opens. Esc closes.</p></div></dialog>
+<dialog id="drawer" class="drawer" aria-labelledby="drawer-title"><div class="drawer-bar"><h2 id="drawer-title">Task</h2><a id="drawer-full" href="/">Open page</a><button type="button" data-close-dialog>Close</button></div><div id="drawer-body" class="drawer-body" tabindex="-1"></div></dialog>
+${tokenMode ? `<dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Log out?</h2><p>End this session in this browser.</p><div class="row"><button value="cancel">Cancel</button><button value="confirm">Log out</button></div></form></dialog>` : ""}`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · Status Hub</title><style>${CSS}</style></head>
+<body class="app" data-page="${page}" data-board-search="${esc(board ? search : "")}">
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+<header class="topbar">
+<a class="org" href="${esc(boardHref(f))}">${esc(org)}</a>
+<button type="button" class="chip" data-dialog-open="switcher" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Switch project">Project <strong>${esc(projectLabel)}</strong> <kbd>⌘K</kbd></button>
+<button type="button" class="chip" popovertarget="pop-member" aria-haspopup="dialog">Member <strong>${esc(memberLabel)}</strong></button>
+<button type="button" class="chip" popovertarget="pop-status" aria-haspopup="dialog">Status <strong>${esc(statusLabel)}</strong></button>
+<form class="search" method="get" action="/" role="search">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("status", f.status)}<input type="search" name="q" value="${esc(f.q)}" placeholder="Search code or title" aria-label="Search tasks"></form>
+<a class="btn primary" href="/new"${page === "new" ? "" : ' data-dialog-open="new-task"'}>New task</a>
+<button type="button" class="chip alerts-btn" popovertarget="pop-alerts" aria-haspopup="dialog">Alerts <span class="count${alertTotal ? " is-on" : ""}" data-alert-total>${alertTotal}</span></button>
+<button type="button" class="user-btn" popovertarget="user-menu" aria-haspopup="dialog"><span class="avatar" aria-hidden="true">${esc(initials(email, email))}</span><span class="uname">${esc(email)}</span></button>
+</header>
+<div class="body">
+<nav class="sidebar" aria-label="Workspace">
+<div class="nav-links">
+${nav("board", boardHref(f), "Board")}
+${nav("done", doneHref(f), "Done")}
+${nav("alerts", "/alerts", "Alerts")}
+${nav("members", "/members", "Members")}
+</div>
+${projects}
+</nav>
+<main id="main" class="${board ? "board-main" : "page-scroll"}">${main}</main>
+</div>
+</div>
+<div id="pop-member" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("status", f.status)}${hidden("q", f.q)}<label>Member<br><select name="member">${memberOpts}</select></label><p><button>Apply</button></p></form>
+<ul class="quick">${chrome.members.map((m) => `<li><a href="/m/${esc(m.id)}">${esc(m.name)} <span class="muted">${m.open_n}</span></a></li>`).join("")}</ul>
+<a href="/members">All members</a></div>
+<div id="pop-status" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("q", f.q)}<label>Status<br><select name="status">${statusOpts}</select></label><p><button>Apply</button> <a href="${esc(pendingHref(f.project))}">Pending approval</a> <a href="/">Clear</a></p></form></div>
+<div id="pop-alerts" popover><p><strong>Open alerts</strong></p><ul class="quick">${chrome.alerts.map((a) => `<li><a href="/alerts">${esc(RULE_LABEL[a.rule] ?? a.rule)} <b>${a.n}</b></a></li>`).join("") || "<li>No open alerts</li>"}</ul><a href="/alerts">View alerts</a></div>
+<div id="user-menu" popover><p class="user-email">${esc(email)}</p><p class="muted">${esc(tzLabel(chrome.tz))}</p>${logout}</div>
+${dialogs}
+<script src="/assets/dashboard.js" defer></script>
+</body></html>`;
+}
+
+function boardSearch(f: Filters): string {
+  return withQuery("", [["project", f.project], ["member", f.member], ["status", f.status], ["q", f.q]]).replace(/^\?/, "");
+}
+
+function renderBoardMain(chrome: Chrome, rows: CardRow[], doneTotal: number, now: number): string {
+  const f = chrome.filters;
+  const cols: Status[] = f.status && f.status !== "cancelled" ? [f.status] : BOARD_COLS;
+  const lanes = f.project ? chrome.projects.filter((p) => p.code === f.project) : chrome.projects;
+  const single = lanes.length === 1;
+  const collapsed = !single && lanes.length > 3;
+  const see = `<a href="${esc(doneHref(f))}">See all (${doneTotal})</a>`;
+  const heads = `<div class="colheads"><div class="colhead-label">Project</div>${cols.map((s) => `<div class="colh s-${s}" data-status="${s}"><span class="badge">${esc(STATUS_LABEL[s])}</span> <span data-col-count>${rows.filter((r) => r.status === s).length}</span>${s === "done" ? ` ${see}` : ""}</div>`).join("")}</div>`;
+  const laneHtml = lanes.map((p) => {
+    const counts = cols.map((s) => `<span class="lane-count" data-count-for="${esc(p.code)}" data-status="${s}" title="${esc(STATUS_LABEL[s])}">${rows.filter((r) => r.project_code === p.code && r.status === s).length}</span>`).join("");
+    const label = `<span class="lane-label"><span class="chev" aria-hidden="true"></span><span class="lane-id">${esc(p.code)}</span><span class="lane-name">${esc(p.name)}</span></span>`;
+    const grid = `<div class="lane-grid"><div class="lane-side"><a href="/p/${esc(p.code)}">Project</a></div>${cols.map((s) => `<div class="cell" data-project="${esc(p.code)}" data-status="${s}"><div class="cell-label s-${s}">${esc(STATUS_LABEL[s])}</div>${rows.filter((r) => r.project_code === p.code && r.status === s).map((r) => card(r, now, chrome.tz)).join("")}</div>`).join("")}</div>`;
+    if (single) return `<section class="lane is-fill" data-lane="${esc(p.code)}" data-lock-open="1"><div class="summary">${label}${counts}</div>${grid}</section>`;
+    return `<details class="lane" data-lane="${esc(p.code)}"${collapsed ? "" : " open"}><summary>${label}${counts}</summary>${grid}</details>`;
+  }).join("");
+  const showCancelled = !f.status || f.status === "cancelled";
+  const cancelled = rows.filter((r) => r.status === "cancelled");
+  const cancelledBox = showCancelled ? `<details class="cancelled"${f.status === "cancelled" ? " open" : ""}><summary>Cancelled (${cancelled.length})</summary><div class="cancelled-list">${lanes.map((p) => `<div class="cell" data-project="${esc(p.code)}" data-status="cancelled">${cancelled.filter((r) => r.project_code === p.code).map((r) => card(r, now, chrome.tz)).join("")}</div>`).join("")}</div></details>` : "";
+  const tools = `<div class="board-tools">${lanes.length > 1 ? `<button type="button" data-lanes="open">Expand all</button><button type="button" data-lanes="close">Collapse all</button>` : ""}<span class="stamp" data-poll-stamp></span></div>`;
+  const empty = lanes.length ? "" : `<p class="empty">No project matches this filter.</p>`;
+  return `${tools}<div id="board" class="board${single ? " is-single" : ""}" style="--cols:${cols.length}">${heads}<div class="lanes">${laneHtml}${empty}${cancelledBox}</div></div>`;
+}
+
+function doc(title: string, body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · Status Hub</title><style>${CSS}</style></head>${body}</html>`;
+}
+
+export function renderLogin(error?: string, next?: string): string {
+  const org = getHubConfig().orgName;
+  const nextField = next ? `<input type="hidden" name="next" value="${esc(next)}">` : "";
+  const err = error ? `<p class="flag">${esc(error)}</p>` : "";
+  return doc("Log in", `<body class="login-body"><main class="login-card"><p class="muted">${esc(org)}</p><h1>Log in</h1>${err}
+<form method="post" action="/login">${nextField}
+<p><label>Login token<br><input type="password" name="token" autocomplete="current-password" required></label></p>
+<button type="submit">Log in</button></form>
+<p class="muted">Ask an operator for a login token. The token is stored only as a hash.</p>
+</main></body>`);
+}
+
+export async function renderBoard(db: D1Database, url: URL, email: string, now = Date.now()) {
+  const chrome = await loadChrome(db, url);
+  const { rows, doneTotal } = await loadCards(db, chrome.filters);
+  return shell("Board", renderBoardMain(chrome, rows, doneTotal, now), email, chrome, "board", true);
+}
+
+export async function boardJson(db: D1Database, url: URL, now = Date.now()): Promise<BoardJson> {
+  const chrome = await loadChrome(db, url);
+  const { rows, doneTotal } = await loadCards(db, chrome.filters);
+  const f = chrome.filters;
+  return {
+    project: f.project,
+    member: f.member,
+    status: f.status,
+    q: f.q,
+    doneTotal,
+    alertTotal: chrome.alerts.reduce((sum, a) => sum + a.n, 0),
+    alerts: chrome.alerts.map((a) => ({ rule: a.rule, label: RULE_LABEL[a.rule] ?? a.rule, n: a.n })),
+    projects: chrome.projects.map((p) => ({ code: p.code, name: p.name, open: p.open_n, alerts: p.alert_n })),
+    cards: rows.map((c) => ({ code: c.code, project_code: c.project_code, status: c.status, rev: cardRev(c), html: card(c, now, chrome.tz) })),
+  };
+}
+
+export async function renderNewTask(db: D1Database, email: string, url = new URL("https://local/")) {
+  const chrome = await loadChrome(db, url);
+  return shell("New task", `<h2>New task</h2>${newTaskForm(chrome.requesters)}`, email, chrome, "new", false);
 }
 
 export async function renderDone(db: D1Database, url: URL, email: string, now = Date.now()) {
-  const project = url.searchParams.get("project") || "";
-  const member = url.searchParams.get("member") || "";
+  const chrome = await loadChrome(db, url);
   const where = ["t.status = 'done'"];
   const binds: unknown[] = [];
-  scope(project, member, where, binds);
-  const { results } = await db.prepare(
-    `${CARD_SQL} WHERE ${where.join(" AND ")} ORDER BY t.done_at DESC, t.code DESC`,
-  ).bind(...binds).all<CardRow>();
-  const tz = await clock(db);
-  const back = `/${querySuffix(project, member)}`;
-  const title = project ? `Done · ${project}` : "Done";
-  return page("Done", `<p><a href="${esc(back)}">← Kanban</a></p><h2>${esc(title)} (${results.length})</h2>
-${results.map((c) => card(c, now, tz)).join("") || "<p>No done tasks.</p>"}`, email, tz);
+  applyScope(chrome.filters, where, binds, false);
+  const { results } = await db.prepare(`${CARD_SQL} WHERE ${where.join(" AND ")} ORDER BY t.done_at DESC, t.code DESC`).bind(...binds).all();
+  const rows = asCards(results);
+  const title = chrome.filters.project ? `Done · ${chrome.filters.project}` : "Done";
+  const body = `<p><a href="${esc(boardHref(chrome.filters))}">Back to board</a></p><h2>${esc(title)} (${rows.length})</h2>${rows.map((c) => card(c, now, chrome.tz)).join("") || `<p class="empty">No done tasks.</p>`}`;
+  return shell(title, body, email, chrome, "done", false);
 }
 
-export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: { error?: string; pr_url?: string }) {
+function reqCell(v: unknown): string {
+  return v ? esc(v) : "Not set";
+}
+
+async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: { error?: string; pr_url?: string }): Promise<string | null> {
   const t = await db.prepare(`${CARD_SQL} WHERE t.code = ?`).bind(code).first<CardRow>();
   if (!t) return null;
-  const full = await db.prepare("SELECT * FROM tasks WHERE code = ?").bind(code).first<any>();
+  const full = await db.prepare("SELECT * FROM tasks WHERE code = ?").bind(code).first<Record<string, unknown>>();
+  if (!full) return null;
   const [u, b, sp, fb] = await db.batch([
     db.prepare("SELECT * FROM updates WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
     db.prepare("SELECT * FROM blockers WHERE task_code = ? ORDER BY opened_at DESC").bind(code),
     db.prepare("SELECT id, status, started_at, ended_at, member_id FROM status_periods WHERE task_code = ? ORDER BY started_at, id").bind(code),
     db.prepare("SELECT id, author, note, at FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
   ]);
-  const tz = await clock(db);
+  const tz = (await loadSettings(db)).tz_offset_minutes;
+  const row = asCards([t])[0]!;
   const per = summarizePeriods(sp.results as unknown as PeriodRow[], now);
   const badge = (st: Status) => `<span class="s-${st}"><span class="badge">${esc(STATUS_LABEL[st] ?? st)}</span></span>`;
   const timeline = `<h3>Time in status</h3>
@@ -245,43 +580,63 @@ ${per.timeline.map((p) => `<tr><td>${badge(p.status)}</td><td>${fmt(p.started_at
 </table>
 <table class="totals" style="margin-top:6px"><tr><th>Totals by status</th>${STATUSES.filter((st) => per.totals[st]).map((st) => `<th>${badge(st)}</th>`).join("")}</tr>
 <tr><td></td>${STATUSES.filter((st) => per.totals[st]).map((st) => `<td>${per.totals[st].duration}${per.totals[st].periods > 1 ? ` <small>(${per.totals[st].periods} times)</small>` : ""}</td>`).join("")}</tr></table>`;
-  const links = (j: string | null) => (j ? (JSON.parse(j) as string[]).map((l) => `<a href="${esc(l)}" rel="noopener">${esc(l)}</a>`).join("<br>") : "");
   const history = [
-    ...(u.results as any[]).map((x) => ({ at: x.at as number, id: x.id as number, who: String(x.member_id), status: `${x.status_from ?? ""} → ${x.status_to ?? ""}`, note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}<br>${links(x.links)}`, lead: false })),
-    ...(fb.results as any[]).map((x) => ({ at: x.at as number, id: x.id as number, who: String(x.author), status: "leadership feedback", note: esc(x.note), lead: true })),
+    ...(u.results as Record<string, unknown>[]).map((x) => ({
+      at: Number(x.at), id: Number(x.id), who: String(x.member_id),
+      status: `${x.status_from ?? ""} → ${x.status_to ?? ""}`,
+      note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}${x.links ? `<br>${linkList(String(x.links))}` : ""}`,
+      lead: false,
+    })),
+    ...(fb.results as Record<string, unknown>[]).map((x) => ({
+      at: Number(x.at), id: Number(x.id), who: String(x.author), status: "leadership feedback", note: esc(x.note), lead: true,
+    })),
   ].sort((a, b) => b.at - a.at || b.id - a.id);
   const author = leadershipAuthor(email);
   const feedbackForm = author ? `<h3>Leadership feedback</h3>
-<form method="post" action="/t/${esc(code)}/feedback"><textarea name="note" maxlength="500" required rows="3" style="width:100%;max-width:640px"></textarea>
+<form method="post" action="/t/${esc(code)}/feedback"><textarea name="note" maxlength="500" required rows="3"></textarea>
 <div><button>Send</button></div></form>` : "";
-  const reqCell = (v: unknown) => (v ? esc(v) : "Not set");
-  const reqLink = full.request_link
-    ? `<a href="${esc(full.request_link)}">${esc(full.request_link)}</a>`
-    : "Not set";
-  return page(code, `<p><a href="/?project=${esc(t.project_code)}">← ${esc(t.project_code)}</a></p>
+  const reqLink = full.request_link ? externalAnchor(String(full.request_link)) : "Not set";
+  const prStored = full.pr_url ? externalAnchor(String(full.pr_url)) : "";
+  return `<div id="task-detail"><h2>${esc(code)}</h2>
 <table><tr><th>Requested by</th><td>${reqCell(full.requested_by)}</td></tr>
-<tr><th>Requested at</th><td>${full.requested_at ? fmt(full.requested_at, tz) : "Not set"}</td></tr>
+<tr><th>Requested at</th><td>${full.requested_at ? fmt(Number(full.requested_at), tz) : "Not set"}</td></tr>
 <tr><th>Request link</th><td>${reqLink}</td></tr></table>
-${card(t, now, tz)}
-<table><tr><th>Feature</th><td>${esc(t.feature_code)} · ${esc(t.feature_title)}</td></tr>
+${card(row, now, tz)}
+<table><tr><th>Feature</th><td>${esc(row.feature_code)} · ${esc(row.feature_title)}</td></tr>
 <tr><th>Reviewer</th><td>${full.reviewer_id ? esc(full.reviewer_id) : "—"}</td></tr>
-<tr><th>Assigned at</th><td>${fmt(full.assigned_at, tz)}</td></tr><tr><th>Started</th><td>${fmt(full.started_at, tz)}</td></tr>
-<tr><th>Due</th><td>${fmt(full.due_at, tz)}</td></tr><tr><th>Done at</th><td>${fmt(full.done_at, tz)}</td></tr>
-<tr><th>PR</th><td>${full.pr_url ? `<a href="${esc(full.pr_url)}">${esc(full.pr_url)}</a>` : "—"}
-<form method="post" action="/t/${encodeURIComponent(code)}" class="f" style="margin:6px 0 0">
+<tr><th>Assigned at</th><td>${fmt(full.assigned_at as number | null, tz)}</td></tr>
+<tr><th>Started</th><td>${fmt(full.started_at as number | null, tz)}</td></tr>
+<tr><th>Due</th><td>${fmt(full.due_at as number | null, tz)}</td></tr>
+<tr><th>Done at</th><td>${fmt(full.done_at as number | null, tz)}</td></tr>
+<tr><th>PR</th><td>${prStored ? `${prStored}<br>` : ""}
+<form method="post" action="/t/${encodeURIComponent(code)}" class="inline">
 <label>PR URL <input name="pr_url" value="${esc(notice?.pr_url ?? full.pr_url ?? "")}" size="52" placeholder="https://"></label>
 <button type="submit">Save</button></form>
 ${notice?.error ? `<p class="flag">${esc(notice.error)}</p>` : ""}</td></tr></table>
 ${timeline}
 <h3>Blockers</h3><table><tr><th>#</th><th>Kind</th><th>Waiting on</th><th>Detail</th><th>Opened</th><th>Closed</th></tr>
-${(b.results as any[]).map((x) => `<tr><td>${x.id}</td><td>${esc(x.kind)}</td><td>${esc(x.waiting_on)}</td><td>${esc(x.detail)}</td><td>${fmt(x.opened_at, tz)}</td><td>${fmt(x.resolved_at, tz)}</td></tr>`).join("")}</table>
+${(b.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.kind)}</td><td>${esc(x.waiting_on)}</td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td><td>${fmt(x.resolved_at as number | null, tz)}</td></tr>`).join("")}</table>
 ${feedbackForm}
 <h3>History</h3><table><tr><th>When</th><th>Who</th><th>Status</th><th>Note</th></tr>
-${history.map((x) => `<tr${x.lead ? ' class="lead"' : ""}><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("")}</table>`, email, tz);
+${history.map((x) => `<tr${x.lead ? ' class="lead"' : ""}><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("")}</table></div>`;
+}
+
+export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: { error?: string; pr_url?: string }) {
+  const detail = await taskDetail(db, code, email, now, notice);
+  if (!detail) return null;
+  const task = await db.prepare("SELECT project_code FROM tasks WHERE code = ?").bind(code).first<{ project_code: string }>();
+  const url = new URL(`https://local/?project=${encodeURIComponent(task?.project_code ?? "")}`);
+  const chrome = await loadChrome(db, url);
+  const back = boardHref(chrome.filters);
+  return shell(code, `<p><a href="${esc(back)}">Back to board</a></p>${detail}`, email, chrome, "task", false);
+}
+
+export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: { error?: string; pr_url?: string }) {
+  return taskDetail(db, code, email, now, notice);
 }
 
 export async function renderProject(db: D1Database, code: string, email: string) {
-  const p = await db.prepare("SELECT * FROM projects WHERE code = ?").bind(code).first<any>();
+  const p = await db.prepare("SELECT * FROM projects WHERE code = ?").bind(code).first<Record<string, unknown>>();
   if (!p) return null;
   const [mods, feats] = await db.batch([
     db.prepare("SELECT * FROM modules WHERE project_code = ? ORDER BY code").bind(code),
@@ -290,51 +645,58 @@ export async function renderProject(db: D1Database, code: string, email: string)
       (SELECT COUNT(*) FROM tasks t WHERE t.feature_code = f.code AND t.status = 'done') AS done
       FROM features f WHERE f.project_code = ? ORDER BY f.code`).bind(code),
   ]);
-  const fs = feats.results as any[];
-  const tz = await clock(db);
-  return page(code, `<h2>${esc(p.code)} · ${esc(p.name)}</h2><p>Owner: ${esc(p.owner_id)} ${p.repo_url ? `· <a href="${esc(p.repo_url)}">repo</a>` : ""} · <a href="/?project=${esc(code)}">Kanban</a></p>
-${(mods.results as any[]).map((m) => `<h3>${esc(m.code)} · ${esc(m.name)}</h3><table><tr><th>Feature</th><th>Priority</th><th>Owner</th><th>Progress</th></tr>
-${fs.filter((f) => f.module_code === m.code).map((f) => `<tr><td><a href="/?project=${esc(code)}">${esc(f.code)}</a> ${esc(f.title)}</td><td>${esc(f.priority)}</td><td>${esc(f.owner_id)}</td><td>${f.total ? Math.round((100 * f.done) / f.total) : 0}% (${f.done}/${f.total})</td></tr>`).join("") || "<tr><td colspan=4>—</td></tr>"}</table>`).join("")}`, email, tz);
+  const fs = feats.results as Record<string, unknown>[];
+  const chrome = await loadChrome(db, new URL(`https://local/?project=${encodeURIComponent(code)}`));
+  const repo = p.repo_url ? externalAnchor(String(p.repo_url), "repo") : "";
+  const body = `<h2>${esc(p.code)} · ${esc(p.name)}</h2><p>Owner: ${esc(p.owner_id)} ${repo ? `· ${repo}` : ""} · <a href="${esc(boardHref(chrome.filters))}">Board</a></p>
+${(mods.results as Record<string, unknown>[]).map((m) => `<h3>${esc(m.code)} · ${esc(m.name)}</h3><table><tr><th>Feature</th><th>Priority</th><th>Owner</th><th>Progress</th></tr>
+${fs.filter((f) => f.module_code === m.code).map((f) => `<tr><td><a href="${esc(boardHref(chrome.filters))}">${esc(f.code)}</a> ${esc(f.title)}</td><td>${esc(f.priority)}</td><td>${esc(f.owner_id)}</td><td>${Number(f.total) ? Math.round((100 * Number(f.done)) / Number(f.total)) : 0}% (${esc(f.done)}/${esc(f.total)})</td></tr>`).join("") || "<tr><td colspan=4>—</td></tr>"}</table>`).join("")}`;
+  return shell(code, body, email, chrome, "project", false);
 }
 
 export async function renderAlerts(db: D1Database, email: string, now = Date.now()) {
-  const tz = await clock(db);
+  const tz = (await loadSettings(db)).tz_offset_minutes;
   const cfg = getHubConfig();
   const [a, b] = await db.batch([
     db.prepare(`SELECT a.rule, a.fired_at, t.code, t.title, t.assignee_id, t.assigned_at, t.last_update_at FROM alerts a
       JOIN tasks t ON t.code = a.task_code WHERE a.cleared_at IS NULL ORDER BY a.rule, a.fired_at`),
     db.prepare(`SELECT b.*, t.title FROM blockers b JOIN tasks t ON t.code = b.task_code WHERE b.resolved_at IS NULL ORDER BY b.opened_at`),
   ]);
-  const blockers = (b.results as any[]).slice().sort((x, y) => {
+  const blockers = (b.results as Record<string, unknown>[]).slice().sort((x, y) => {
     const rank = waitingRank(String(x.waiting_on), cfg) - waitingRank(String(y.waiting_on), cfg);
     return rank || Number(x.opened_at) - Number(y.opened_at);
   });
-  return page("Alerts", `<h2>Open blockers</h2><table><tr><th>Task</th><th>Waiting on</th><th>Detail</th><th>Opened</th></tr>
-${blockers.map((x) => `<tr><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a> ${esc(x.title)}</td><td><b>${esc(x.waiting_on)}</b></td><td>${esc(x.detail)}</td><td>${fmt(x.opened_at, tz)} (${ago(x.opened_at, now)})</td></tr>`).join("")}</table>
+  const chrome = await loadChrome(db, new URL("https://local/"));
+  const body = `<h2>Open blockers</h2><table><tr><th>Task</th><th>Waiting on</th><th>Detail</th><th>Opened</th></tr>
+${blockers.map((x) => `<tr><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a> ${esc(x.title)}</td><td><b>${esc(x.waiting_on)}</b></td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td></tr>`).join("")}</table>
 <h2>Alerts</h2><table><tr><th>Rule</th><th>Task</th><th>Member</th><th>Assigned</th><th>Last update</th></tr>
-${(a.results as any[]).map((x) => `<tr><td>${esc(RULE_LABEL[x.rule] ?? x.rule)}</td><td><a href="/t/${esc(x.code)}">${esc(x.code)}</a> ${esc(x.title)}</td><td><a href="/m/${esc(x.assignee_id)}">${esc(x.assignee_id)}</a></td><td>${fmt(x.assigned_at, tz)} (${ago(x.assigned_at, now)})</td><td>${fmt(x.last_update_at, tz)}</td></tr>`).join("")}</table>`, email, tz);
+${(a.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(RULE_LABEL[String(x.rule)] ?? String(x.rule))}</td><td><a href="/t/${esc(x.code)}">${esc(x.code)}</a> ${esc(x.title)}</td><td><a href="/m/${esc(x.assignee_id)}">${esc(x.assignee_id)}</a></td><td>${fmt(x.assigned_at as number | null, tz)} (${ago(x.assigned_at as number | null, now)})</td><td>${fmt(Number(x.last_update_at), tz)}</td></tr>`).join("")}</table>`;
+  return shell("Alerts", body, email, chrome, "alerts", false);
 }
 
 export async function renderMembers(db: D1Database, email: string) {
   const { results } = await db.prepare(`SELECT m.id, m.name, m.role, m.is_admin, (m.token_hash IS NOT NULL) AS has_token,
     (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = m.id AND t.status IN ('assigned','in_progress','review','blocked')) AS open,
     (SELECT COUNT(*) FROM alerts a JOIN tasks t ON t.code = a.task_code WHERE t.assignee_id = m.id AND a.cleared_at IS NULL) AS alerts
-    FROM members m WHERE m.active = 1 ORDER BY m.is_admin DESC, m.id`).all<any>();
-  const tz = await clock(db);
-  return page("Members", `<table><tr><th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th></tr>
-${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${m.open}</td><td>${m.alerts}</td></tr>`).join("")}</table>`, email, tz);
+    FROM members m WHERE m.active = 1 ORDER BY m.is_admin DESC, m.id`).all<Record<string, unknown>>();
+  const chrome = await loadChrome(db, new URL("https://local/"));
+  const body = `<h2>Members</h2><table><tr><th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th></tr>
+${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${esc(m.open)}</td><td>${esc(m.alerts)}</td></tr>`).join("")}</table>`;
+  return shell("Members", body, email, chrome, "members", false);
 }
 
 export async function renderMember(db: D1Database, id: string, email: string, now = Date.now()) {
-  const m = await db.prepare("SELECT * FROM members WHERE id = ?").bind(id).first<any>();
+  const m = await db.prepare("SELECT * FROM members WHERE id = ?").bind(id).first<Record<string, unknown>>();
   if (!m) return null;
   const [cards, ups, ns] = await db.batch([
     db.prepare(`${CARD_SQL} WHERE t.assignee_id = ? AND t.status IN ('assigned','in_progress','review','blocked') ORDER BY t.last_update_at DESC`).bind(id),
     db.prepare("SELECT * FROM updates WHERE member_id = ? ORDER BY at DESC LIMIT 30").bind(id),
     db.prepare(`SELECT COUNT(*) AS n FROM alerts a JOIN tasks t ON t.code = a.task_code WHERE a.rule = 'NOT_STARTED' AND t.assignee_id = ? AND a.fired_at >= ?`).bind(id, now - 7 * 86_400_000),
   ]);
-  const tz = await clock(db);
-  return page(m.name, `<h2>${esc(m.name)} <small>(${esc(m.role)})</small></h2><p>Not-started alerts in the last 7 days: <b>${(ns.results[0] as any).n}</b></p>
-${(cards.results as any[]).map((c) => card(c, now, tz)).join("") || "<p>No open tasks.</p>"}
-<h3>Timeline</h3><table>${(ups.results as any[]).map((x) => `<tr><td>${fmt(x.at, tz)}</td><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a></td><td>${esc(x.status_from ?? "")} → ${esc(x.status_to ?? "")}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>`, email, tz);
+  const chrome = await loadChrome(db, new URL(`https://local/?member=${encodeURIComponent(id)}`));
+  const rows = asCards(cards.results);
+  const body = `<h2>${esc(m.name)} <small>(${esc(m.role)})</small></h2><p>Not-started alerts in the last 7 days: <b>${esc((ns.results[0] as { n: number }).n)}</b></p>
+${rows.map((c) => card(c, now, chrome.tz)).join("") || `<p class="empty">No open tasks.</p>`}
+<h3>Timeline</h3><table>${(ups.results as Record<string, unknown>[]).map((x) => `<tr><td>${fmt(Number(x.at), chrome.tz)}</td><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a></td><td>${esc(x.status_from ?? "")} → ${esc(x.status_to ?? "")}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>`;
+  return shell(String(m.name), body, email, chrome, "member", false);
 }
