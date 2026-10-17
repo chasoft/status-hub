@@ -1,18 +1,89 @@
 # Status Hub
 
-Status Hub is a small Cloudflare Worker that keeps a shared task board for people and AI bots. Bots report status over MCP. People watch the same work on a Kanban UI. A cron trigger raises alerts from SQL, so the checks do not spend model tokens.
+Status Hub is a status board where AI bots and people report the same tasks. Bots write status over [MCP](docs/mcp.md). People read and filter that work on a Kanban board. One [Cloudflare Worker](https://developers.cloudflare.com/workers/) and one [D1](https://developers.cloudflare.com/d1/) database hold the board. A cron trigger raises alerts from SQL, so those checks do not spend model tokens.
+
+You deploy it on your own Cloudflare account. The npm package is marked private and is not published to a registry.
 
 Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 
 ## Features
 
-- One Worker and one D1 database. No Durable Objects.
-- Two hostnames:
-  - UI, behind Cloudflare Access. The Worker checks the `Cf-Access-Jwt-Assertion` JWT again and an email allowlist.
-  - MCP, only `/mcp`, one bearer token per bot.
-- Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
-- Task codes are allocated inside one `db.batch()` so parallel creates do not collide.
-- Status history, blockers, leadership feedback, and a 5-minute alert cron.
+- **Kanban by status, with a project filter.** Columns are statuses. Rows are projects. Filter by project, member, or status.
+- **Project, module, feature, and task codes.** Feature and task numbers are allocated inside one `db.batch()`, so two creates at the same time cannot take the same code.
+- **Pending approval.** A task waits in `pending_approval` until an admin approves or rejects it.
+- **Reviewer.** A move to `review` names an active member as reviewer when the task does not have one yet.
+- **Blockers.** A blocker records who the work is waiting on and moves the task to `blocked`.
+- **Alerts.** Every five minutes the Worker opens alerts for work that has not started, gone stale, stayed blocked, or passed its due time.
+- **Leadership feedback.** People named in the deployment config can leave a note on a task. The assignee sees it as unread until they open the task.
+
+The lifecycle is in [docs/workflow.md](docs/workflow.md). Every environment variable is in [docs/configuration.md](docs/configuration.md).
+
+![Placeholder for a screenshot of the Kanban board](docs/images/kanban-placeholder.png)
+
+*Screenshot placeholder. After you deploy, replace `docs/images/kanban-placeholder.png` with a capture of your board.*
+
+The board is server-rendered HTML and refreshes every 60 seconds. Times use the configured timezone offset (UTC by default).
+
+| Path | Page |
+|---|---|
+| `/` | Kanban. The Done column lists the 10 newest done tasks and links to the full list. |
+| `/done` | Every done task for the current project and member filters. |
+| `/new` | Create-task form. |
+| `/alerts` | Open alerts and blockers. |
+| `/members` | Active members, roles, and whether a token hash is stored. |
+| `/m/:id` | One member and their open tasks. |
+| `/p/:code` | One project, its modules, and its features. |
+| `/t/:code` | One task: request, reviewer, blockers, time in each status, history, leadership feedback, and the pull-request URL. |
+
+The UI hostname expects a Cloudflare Access JWT. The Worker verifies that JWT again and checks an email allowlist. The MCP hostname serves only `/mcp`. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
+
+## Deploy in 10 minutes
+
+A `pnpm run setup` script is coming. Until that script is on main, use the steps below.
+
+Pluggable UI authentication (`AUTH_MODE`) is coming. This release always uses Cloudflare Access on the UI hostname and a bearer token on `/mcp`.
+
+You need Node.js 22, pnpm 10, a Cloudflare account, and a DNS zone on that account for the UI and MCP hostnames.
+
+```bash
+git clone https://github.com/chasoft/status-hub.git
+cd status-hub
+corepack enable
+pnpm install
+npx wrangler login
+npx wrangler d1 create status-hub
+```
+
+Paste the printed database id into `database_id` in [wrangler.jsonc](wrangler.jsonc). Replace the `example.com` hostnames, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and the email lists. The defaults and the meaning of each variable are in [docs/configuration.md](docs/configuration.md).
+
+```bash
+pnpm db:migrate:remote
+pnpm deploy
+```
+
+Create a Cloudflare Access self-hosted application for the UI hostname only. Copy its AUD tag into `ACCESS_AUD` and the team domain (no `https://`) into `ACCESS_TEAM_DOMAIN`. Leave the MCP hostname off Access. Redeploy after those values change. An empty `ACCESS_AUD` denies every UI request, which is the safe default in the committed config.
+
+Migration `0002_seed.sql` inserts no members and no projects. Add an admin, then mint a bot token on your machine. `created_at` is epoch milliseconds.
+
+```bash
+NOW=$(node -e 'console.log(Date.now())')
+npx wrangler d1 execute status-hub --remote --command \
+  "INSERT INTO members (id, name, role, is_admin, created_at) VALUES ('admin', 'Board admin', 'admin', 1, $NOW)"
+pnpm run token admin
+```
+
+Standard output is the raw token. Standard error is the Wrangler command that stores the SHA-256. Run that command. Deliver the raw token as a secret. The default `UI_MEMBER_EMAILS` value `you@example.com=admin` maps that address to member id `admin`; change the address to one your Access policy will send.
+
+Point the bot at `https://<MCP_HOST>/mcp` with header `Authorization: Bearer <token>`. Connecting a client is in [docs/mcp.md](docs/mcp.md). Open `https://<UI_HOST>/` in a browser that has passed Access.
+
+Before you deploy, `pnpm typecheck` and `pnpm test` run the same checks as CI, apart from secret scanning. `pnpm test` is also how the board and `/mcp` are exercised without a live Access application. `pnpm db:migrate:local` then `pnpm dev` starts the Worker. A request is served only when its hostname is `UI_HOST` or `MCP_HOST`, and the UI still requires a verified Access JWT.
+
+Staging is a second Worker. Create the database `status-hub-staging`, fill in `env.staging`, then:
+
+```bash
+pnpm db:migrate:staging
+pnpm deploy:staging
+```
 
 ## Codes
 
@@ -20,134 +91,19 @@ Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 |---|---|---|
 | Project | `^[A-Z]{2,5}$` | `APP` |
 | Module | `PRJ-MOD` | `APP-CORE` |
-| Feature | `PRJ-MOD-NNN` (server allocated) | `APP-CORE-001` |
-| Task | `PRJ-MOD-NNN.T` (server allocated) | `APP-CORE-001.1` |
+| Feature | `PRJ-MOD-NNN`, allocated by the server | `APP-CORE-001` |
+| Task | `PRJ-MOD-NNN.T`, allocated by the server | `APP-CORE-001.1` |
 
-Creating a project also creates a `CORE` module. Migration `0002_seed.sql` inserts nothing. Add members and projects after deploy.
+`create_project` also creates a module named Core with code `<PROJECT>-CORE`. Module, feature, and task rules are in [docs/workflow.md](docs/workflow.md).
 
-## Roles
+## Documentation
 
-Identity always comes from the bearer token or the verified Access email, never from tool arguments.
-
-| Group | Who | Can |
-|---|---|---|
-| admin | `is_admin = 1` or role `admin` | Everything, including `create_project`, `create_module`, and `set_token_hash` |
-| leader | role `pm`, `po`, `lead`, or admin | `create_feature`, `assign_task`, `list_alerts`, and status changes for other people's tasks |
-| member | any bot | `report_status`, `add_note`, `set_blocker`, and `resolve_blocker` on tasks assigned to them |
-
-`requested_by` must be a configured owner id, a configured approver id, or an active member with role `pm`. `approved_by` and a non-member `waiting_on` must be a configured owner or approver id. `waiting_on` may also be any existing member id.
-
-Set `OWNER_IDS` and `APPROVER_IDS` to the ids your deployment already uses. An existing board keeps the previous approval and blocker behaviour when those lists name the same ids it used before.
-
-## Task lifecycle
-
-```
-pending_approval -> backlog -> assigned -> in_progress -> review -> done
-                         |          |            ^           |
-                         |          +-> blocked --+          +-> in_progress
-                         +-> cancelled
-```
-
-- A missing `requested_by`, `requested_at`, or `request_link` forces `pending_approval`.
-- A non-admin create stays in `pending_approval` even when the request is complete.
-- An assignee does not change status. Only `report_status` or `set_blocker` does.
-- Leaving `pending_approval` is admin-only. Approval goes to `backlog` or `assigned`. Rejection goes to `cancelled` and needs a note. Both require `approved_by`.
-- `blocked` is entered only through `set_blocker`. `done` requires a note.
-- A `/pull/N` link is copied into `pr_url`. `pr_url` and `links` accept only `http` and `https`.
-
-## Alerts
-
-The cron runs every 5 minutes and is safe to run twice. Thresholds live in the `settings` table. Set the matching env var to override a row without editing SQL. Leave the env var unset to keep the database value.
-
-| Rule | Condition | Setting | Env override |
-|---|---|---|---|
-| NOT_STARTED | `assigned` for at least 15 minutes | `not_started_minutes` | `NOT_STARTED_MINUTES` |
-| STALE | `in_progress` with no update for 4 working hours | `stale_hours`, `stale_work_start_hour`, `stale_work_end_hour`, `tz_offset_minutes` | `STALE_HOURS`, `STALE_WORK_START_HOUR`, `STALE_WORK_END_HOUR`, `TZ_OFFSET_MINUTES` |
-| BLOCKED_LONG | open blocker for at least 2 hours | `blocked_hours` | `BLOCKED_HOURS` |
-| OVERDUE | past `due_at` and not done, cancelled, or pending approval | | |
-
-Working hours default to 08:00–22:00 in the configured timezone. `tz_offset_minutes` is minutes east of UTC. The default is `0` (UTC).
-
-## MCP tools
-
-`whoami`, `list_my_tasks`, `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `get_task`, `get_task_timeline`, `get_project_overview`, `list_alerts`, `create_feature`, `create_task`, `update_task`, `assign_task`, `create_project`, `create_module`, `set_token_hash`.
-
-`list_alerts`, `create_feature`, `create_task`, and `assign_task` require a leader. `create_project`, `create_module`, and `set_token_hash` require an admin. `update_task` is the assignee or a leader. Call `report_status` when the status changes, not on a timer.
-
-Token format: `shk_<memberId>_<random>`. D1 stores only the SHA-256. Compare with `crypto.subtle.timingSafeEqual`.
-
-```bash
-node scripts/gen-token.mjs <member-id>
-# stdout: raw token (deliver it as a secret)
-# stderr: wrangler command that stores the hash
-```
-
-Point the bot at `https://<MCP_HOST>/mcp` with `Authorization: Bearer <token>`. Revoke with `set_token_hash` and `sha256: null`.
-
-## UI
-
-- `/` Kanban. Columns are status. Rows are projects. The Done column shows the 10 newest tasks and a link to the full list.
-- `/new` create-task form.
-- `/done` every done task for the current project and member filters.
-- `/alerts`, `/members`, `/m/:id`, `/p/:code`, `/t/:code`.
-- Pages refresh every 60 seconds. Times use `tz_offset_minutes`.
-
-## Configuration
-
-Documented in `wrangler.jsonc`. Replace the `example.com` placeholders before deploy.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `UI_HOST` | `status.example.com` | UI hostname. Must match the UI custom domain. |
-| `MCP_HOST` | `mcp.example.com` | MCP hostname. Must match the MCP custom domain. |
-| `ORG_NAME` | `Status Hub` | UI header text. |
-| `MCP_SERVER_NAME` | `status-hub` | Name advertised to MCP clients. |
-| `ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` | Access team domain, no scheme. |
-| `ACCESS_AUD` | empty | Access application AUD tag. Empty denies the UI. |
-| `UI_ALLOWED_EMAILS` | `you@example.com` | Comma-separated emails allowed to open the UI. |
-| `OWNER_IDS` | empty | Comma-separated owner ids. |
-| `APPROVER_IDS` | empty | Comma-separated approver ids. |
-| `UI_MEMBER_EMAILS` | `you@example.com=admin` | `email=memberId` pairs. Other emails use the local-part when it is a member id. |
-| `LEADERSHIP_AUTHORS` | `you@example.com=Owner` | `email=Display Name` pairs allowed to post leadership feedback. |
-| `NOT_STARTED_MINUTES` | settings table | Optional alert override. |
-| `STALE_HOURS` | settings table | Optional alert override. |
-| `STALE_WORK_START_HOUR` | settings table | Optional alert override. |
-| `STALE_WORK_END_HOUR` | settings table | Optional alert override. |
-| `BLOCKED_HOURS` | settings table | Optional alert override. |
-| `TZ_OFFSET_MINUTES` | settings table (`0`) | Optional timezone override, minutes east of UTC. |
-
-`database_id` in `wrangler.jsonc` is a placeholder. Replace it with the id printed by `wrangler d1 create`. Do not commit a real account id or API token.
-
-Migrations `0001` through `0006` keep their filenames so an existing database does not apply them again. New schema changes belong in `0007` and later and must be additive.
-
-## Quick deploy
-
-Requires Node 22 and pnpm. This repository does not deploy itself.
-
-```bash
-pnpm install
-pnpm typecheck
-pnpm test
-npx wrangler d1 create status-hub
-# paste the database id into wrangler.jsonc, then set hosts, Access, and allowlists
-pnpm db:migrate:remote
-pnpm deploy
-```
-
-Create a Cloudflare Access self-hosted application for the UI hostname only. Copy its AUD tag into `ACCESS_AUD` and the team domain into `ACCESS_TEAM_DOMAIN`. Leave the MCP hostname off Access. It authenticates with the bearer token.
-
-Staging uses `wrangler deploy --env staging` and `pnpm db:migrate:staging` after you create `status-hub-staging` and fill in `env.staging`.
-
-## Dev
-
-```bash
-pnpm install
-pnpm typecheck
-pnpm test
-pnpm db:migrate:local && pnpm dev
-```
-
-`pnpm test` runs Vitest with `@cloudflare/vitest-plugin` and a local D1 database.
+- [Configuration](docs/configuration.md) — every variable in `wrangler.jsonc`
+- [MCP](docs/mcp.md) — endpoint, bearer token, and each tool
+- [Workflow](docs/workflow.md) — statuses and who may change them
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 
