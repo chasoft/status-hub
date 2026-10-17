@@ -16,16 +16,16 @@ Two hostnames are meant to be reachable.
 
 | Hostname | Who calls it | Check |
 |---|---|---|
-| `UI_HOST` | Browsers | Cloudflare Access in front of the hostname, then the Worker verifies `Cf-Access-Jwt-Assertion` again. |
-| `MCP_HOST` | Bots | `POST /mcp` with `Authorization: Bearer <token>`. Leave this hostname off Access. |
+| `UI_HOST` | Browsers | `AUTH_MODE=access`: Cloudflare Access in front of the hostname, then the Worker verifies `Cf-Access-Jwt-Assertion` again. `AUTH_MODE=token`: a login token checked against a SHA-256 in D1, then a signed session cookie. |
+| `MCP_HOST` | Bots | `POST /mcp` with `Authorization: Bearer <token>`. Leave this hostname off Access. `AUTH_MODE` does not apply. |
 
 `workers_dev` and `preview_urls` are false. The fetch handler returns 403 for every other hostname, including a `workers.dev` host and a preview URL. The MCP host returns 404 for every path other than `/mcp`.
 
-An empty `ACCESS_AUD` denies every UI request. Keep that default until the Access application exists, then set `ACCESS_AUD` to that application's AUD tag and `ACCESS_TEAM_DOMAIN` to the team domain without a scheme.
+An empty `ACCESS_AUD` denies every UI request when `AUTH_MODE=access`. Keep that default until the Access application exists, then set `ACCESS_AUD` to that application's AUD tag and `ACCESS_TEAM_DOMAIN` to the team domain without a scheme. `AUTH_MODE=token` does not read `ACCESS_AUD`.
 
 ## Access JWT
 
-The UI check requires all of the following:
+When `AUTH_MODE` is `access` (the default), the UI check requires all of the following:
 
 - Header `Cf-Access-Jwt-Assertion` with three segments.
 - Algorithm `RS256`, and a matching key from `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs`. Keys are cached for one hour.
@@ -34,7 +34,20 @@ The UI check requires all of the following:
 - `iss` equal to `https://<ACCESS_TEAM_DOMAIN>`.
 - An `email` that appears in `UI_ALLOWED_EMAILS`.
 
-The Access policy and this check both have to pass. The email is lowercased. Role and admin rights then come from the `members` row, not from the JWT.
+The Access policy and this check both have to pass. The email is lowercased. Role and admin rights then come from the `members` row, not from the JWT. `AUTH_MODE=token` does not accept this JWT.
+
+## Login tokens
+
+When `AUTH_MODE` is `token`, the UI uses a login token instead of Access.
+
+- Format `shu_` plus 43 to 128 characters from `[A-Za-z0-9_-]`. `scripts/gen-ui-login.mjs` uses 32 random bytes, base64url-encoded.
+- D1 stores hex SHA-256 in `ui_login_tokens.token_hash`, plus the email. The raw token is not stored. The compare uses `crypto.subtle.timingSafeEqual`.
+- The email must be in `UI_ALLOWED_EMAILS`. A revoked row (`revoked_at`) or an `expires_at` in the past cannot open a session.
+- `AUTH_SESSION_SECRET` (at least 16 characters) signs cookie `sh_session` with HMAC-SHA256. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`. A missing or short secret makes login return 500 and sets no cookie.
+- `ui_sessions` stores the email and expiry. `POST /logout` sets `revoked_at`. Replaying the cookie after logout fails. Login and logout use the same `Sec-Fetch-Site` rule as other UI form posts.
+- Mint with `pnpm run ui-login <email>`. Stdout is the secret. Stderr is the command that writes the hash. Deliver the raw token through a secret channel. Do not put it in the repository, and do not log the raw token, the cookie, or `AUTH_SESSION_SECRET`.
+
+`magic-link` is rejected. Sending a link needs an email provider, which this Worker does not include.
 
 ## Bot tokens
 
@@ -63,7 +76,8 @@ The create-task form records the first active `is_admin` member as the creator. 
 
 ## Data to keep out of git
 
-- Raw bot tokens and `members.token_hash` values from production.
+- Raw bot tokens, raw UI login tokens, and production hash values from `members.token_hash` or `ui_login_tokens`.
+- `AUTH_SESSION_SECRET`. Set it with `wrangler secret put`, not in `wrangler.jsonc`.
 - Cloudflare API tokens and account ids.
 - A real D1 `database_id`. The ids in `wrangler.jsonc` are placeholders.
 - `.dev.vars` and other local secret files. `.dev.vars*` is gitignored.

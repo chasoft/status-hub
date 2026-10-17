@@ -2,6 +2,14 @@
 
 All notable changes to Status Hub are documented in this file. The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers match [package.json](package.json). The license is MIT. Copyright (c) 2026 Chasoft Labs.
 
+## Unreleased
+
+### Added
+
+- `AUTH_MODE=token`: a login page, SHA-256 login tokens in D1 (`ui_login_tokens`), and a signed `HttpOnly` `Secure` `SameSite=Lax` session cookie with logout. `AUTH_MODE=access` is unchanged. `magic-link` is not available.
+- `pnpm run ui-login` (`scripts/gen-ui-login.mjs`) mints a UI login token locally and prints the SQL for the hash.
+- Migration `0008_ui_login.sql`.
+
 ## 0.1.0 - 2026-10-17
 
 First open-source release. One Cloudflare Worker, one D1 database, an MCP server for bots, and a server-rendered Kanban board for people.
