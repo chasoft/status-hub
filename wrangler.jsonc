@@ -1,0 +1,96 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "status-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-17",
+  "compatibility_flags": ["nodejs_compat"],
+  // Only the custom domains below are reachable. workers.dev and preview URLs stay off.
+  "workers_dev": false,
+  "preview_urls": false,
+  // Replace example.com with your hostnames before the first deploy.
+  "routes": [
+    { "pattern": "status.example.com", "custom_domain": true },
+    { "pattern": "mcp.example.com", "custom_domain": true }
+  ],
+  "vars": {
+    // "production" or "staging". Tests set "test" so they can inject a JWKS.
+    "ENVIRONMENT": "production",
+    // UI_HOST: hostname of the Kanban UI. Must match the UI custom domain above.
+    "UI_HOST": "status.example.com",
+    // MCP_HOST: hostname of the MCP server. Must match the MCP custom domain. Only /mcp is served.
+    "MCP_HOST": "mcp.example.com",
+    // ORG_NAME: text shown in the UI header.
+    "ORG_NAME": "Status Hub",
+    // MCP_SERVER_NAME: server name advertised to MCP clients.
+    "MCP_SERVER_NAME": "status-hub",
+    // ACCESS_TEAM_DOMAIN: Cloudflare Access team domain, without https://.
+    // Example: your-team.cloudflareaccess.com
+    "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
+    // ACCESS_AUD: Access application AUD tag for the UI hostname. Empty denies every UI request.
+    "ACCESS_AUD": "",
+    // UI_ALLOWED_EMAILS: comma-separated emails allowed to open the UI, in addition to the Access policy.
+    "UI_ALLOWED_EMAILS": "you@example.com",
+    // OWNER_IDS: comma-separated ids treated as owners. They may be waiting_on, requested_by, and approved_by.
+    // They do not have to exist in the members table.
+    "OWNER_IDS": "",
+    // APPROVER_IDS: comma-separated ids treated as approvers. Same privileges as owners.
+    // Set these to the ids your deployment already uses. Owners and approvers do not have to be members.
+    "APPROVER_IDS": "",
+    // UI_MEMBER_EMAILS: comma-separated email=memberId pairs for UI sessions.
+    // Emails not listed here map to a member id by their local-part when that id exists.
+    "UI_MEMBER_EMAILS": "you@example.com=admin",
+    // LEADERSHIP_AUTHORS: comma-separated email=Display Name pairs.
+    // Only these sessions can post leadership feedback. The display name is what gets stored.
+    "LEADERSHIP_AUTHORS": "you@example.com=Owner",
+    // Optional alert overrides. Leave a variable unset to use the settings table.
+    // Defaults (migration 0001, overridable in SQL): not_started_minutes=15, stale_hours=4,
+    // stale_work_start_hour=8, stale_work_end_hour=22, blocked_hours=2, tz_offset_minutes=0 (UTC).
+    // NOT_STARTED_MINUTES, STALE_HOURS, STALE_WORK_START_HOUR, STALE_WORK_END_HOUR,
+    // BLOCKED_HOURS, TZ_OFFSET_MINUTES (minutes east of UTC).
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "status-hub",
+      // database_id: from `wrangler d1 create status-hub`. Placeholder only; not a real database.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": true }, "traces": { "enabled": true } },
+  "env": {
+    "staging": {
+      "name": "status-hub-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        { "pattern": "status-staging.example.com", "custom_domain": true },
+        { "pattern": "mcp-staging.example.com", "custom_domain": true }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "UI_HOST": "status-staging.example.com",
+        "MCP_HOST": "mcp-staging.example.com",
+        "ORG_NAME": "Status Hub",
+        "MCP_SERVER_NAME": "status-hub",
+        "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
+        "ACCESS_AUD": "",
+        "UI_ALLOWED_EMAILS": "you@example.com",
+        "OWNER_IDS": "",
+        "APPROVER_IDS": "",
+        "UI_MEMBER_EMAILS": "you@example.com=admin",
+        "LEADERSHIP_AUTHORS": "you@example.com=Owner"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "status-hub-staging",
+          "database_id": "00000000-0000-0000-0000-000000000001",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": { "crons": ["*/5 * * * *"] }
+    }
+  }
+}
