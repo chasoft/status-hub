@@ -8,6 +8,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const setup = resolve(root, "scripts/setup.mjs");
 const localConfig = resolve(root, "wrangler.local.jsonc");
 
+// An operator may already have a wrangler.local.jsonc (after `pnpm run setup`, or a
+// deploy pipeline that writes one before testing). The CLI must not create, change,
+// or remove it, so compare against the state before the run.
+function localConfigState() {
+  return existsSync(localConfig) ? readFileSync(localConfig, "utf8") : null;
+}
+
 function run(args, env = {}) {
   return spawnSync(process.execPath, [setup, ...args], {
     cwd: root,
@@ -31,13 +38,15 @@ describe("setup cli", () => {
   });
 
   it("exits non-zero when non-interactive values are missing", () => {
+    const before = localConfigState();
     const result = run(["--yes"]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("STATUS_HUB_ORG_NAME");
-    expect(existsSync(localConfig)).toBe(false);
+    expect(localConfigState()).toBe(before);
   });
 
   it("dry-run prints config and does not write or call wrangler", () => {
+    const before = localConfigState();
     const result = run([
       "--yes",
       "--dry-run",
@@ -62,14 +71,14 @@ describe("setup cli", () => {
     expect(result.stdout).toContain("status.acme.test");
     expect(result.stdout).toContain('"-300"');
     expect(result.stdout).toContain('"AUTH_MODE": "access"');
-    expect(existsSync(localConfig)).toBe(false);
+    expect(localConfigState()).toBe(before);
     const tokenMode = run([...resultArgs(), "--auth-mode", "token"]);
     expect(tokenMode.status, tokenMode.stderr).toBe(0);
     expect(tokenMode.stderr).toContain("would upload AUTH_SESSION_SECRET");
     expect(tokenMode.stdout).toContain('"AUTH_MODE": "token"');
     expect(tokenMode.stdout).not.toContain("AUTH_SESSION_SECRET");
     expect(tokenMode.stdout).not.toMatch(/shu_[A-Za-z0-9_-]{43,}/);
-    expect(existsSync(localConfig)).toBe(false);
+    expect(localConfigState()).toBe(before);
   });
 });
 
