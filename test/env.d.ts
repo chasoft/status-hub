@@ -14,6 +14,7 @@ declare global {
       MCP_SERVER_NAME?: string;
       UI_MEMBER_EMAILS?: string;
       LEADERSHIP_AUTHORS?: string;
+      CURSOR_API_KEY?: string;
       UI_ALLOWED_EMAILS?: string;
       AUTH_MODE?: string;
       AUTH_SESSION_SECRET?: string;

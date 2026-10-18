@@ -47,7 +47,7 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
 
   tool("whoami", "Bot id, role, open task count, and open alert count.", {}, () => core.whoami(db, me));
   tool("list_my_tasks",
-    "Tasks for the caller, with open alerts and unread_feedback_count. status: one status or an array; omitted = assigned/in_progress/review/blocked. role: assignee (default), reviewer, or any. Each row includes role (assignee, reviewer, both). limit defaults to 50, max 200; offset.",
+    "Tasks for the caller, with open alerts and unread_feedback_count. status: one status or an array; omitted = assigned/in_progress/review/blocked. Tasks where the caller is the assignee and feedback is still unread are included even when that status is outside the filter (including pending_approval and backlog). role: assignee (default), reviewer, or any. Each row includes role (assignee, reviewer, both), agent_url, agent_status, and agent_updated_at. limit defaults to 50, max 200; offset. Leadership feedback opens one LEADERSHIP_FEEDBACK alert per task.",
     { status: z.union([status, z.array(status).min(1)]).optional(),
       role: z.enum(["assignee", "reviewer", "any"]).optional(),
       limit: z.number().int().min(1).max(200).optional(),
@@ -59,6 +59,12 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
       reviewer: z.string().max(32).optional().describe("Active member id. Required when moving to review if the task has no reviewer yet."),
       approved_by: approver.optional() },
     (a) => core.reportStatus(db, me, a));
+  tool("set_agent",
+    "Attach or clear the cloud agent working on a task. Does not change the task status. agent_url accepts https only (null or an empty string clears it). A Cursor agent uses https://cursor.com/agents/bc-…. status is the status the bot reports (null clears it). Call this when the agent is opened and again when the link is removed. Only the assignee, the reviewer, or a pm/po/lead/admin.",
+    { task: taskCode,
+      agent_url: z.string().max(500).nullable().optional().describe("https URL; null or an empty string clears it"),
+      status: z.string().max(64).nullable().optional().describe("agent status reported by the bot; null clears it") },
+    (a) => core.setAgent(db, me, a));
   tool("add_note", "Record progress without changing status (clears STALE).",
     { task: taskCode, note: z.string().max(core.NOTE_MAX), links: z.array(z.string()).max(10).optional() },
     (a) => core.addNote(db, me, a));
@@ -67,7 +73,7 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
     (a) => core.setBlocker(db, me, a));
   tool("resolve_blocker", "Close a blocker. The task returns to in_progress when none remain.", { id: z.number().int(), note: z.string().max(core.NOTE_MAX).optional() },
     (a) => core.resolveBlocker(db, me, a));
-  tool("get_task", "Task detail (including reviewer_id), the latest request version, an attachment summary (requirement and output, plus output links), the 10 latest updates, leadership feedback (feedback[].unread, request_version, output_ref), and time in each status (periods, epoch ms UTC). When the assignee calls this, feedback is marked read. attachments_configured is false when the R2 binding is absent.", { code: taskCode },
+  tool("get_task", "Task detail (including reviewer_id, agent_url, agent_status, agent_updated_at), the latest request version, an attachment summary (requirement and output, plus output links), the 10 latest updates, leadership feedback (feedback[].unread, request_version, output_ref), and time in each status (periods, epoch ms UTC). When the assignee calls this, feedback is marked read and the LEADERSHIP_FEEDBACK alert is cleared. attachments_configured is false when the R2 binding is absent.", { code: taskCode },
     async (a) => ({ ...await core.getTask(db, a.code, Date.now(), me), attachments_configured: !!bucket }));
   tool("set_request",
     "Store a new markdown request version (v1, v2, …). Does not overwrite older versions. The caller is the author. note is an optional change note, up to 500 characters. The markdown should cover who requested the work, what, why, acceptance criteria, and impacted areas.",

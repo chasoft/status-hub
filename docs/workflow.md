@@ -95,12 +95,12 @@ Group is derived from the member row on the bot token or, for a UI write, from t
 | Admin | `is_admin = 1` or role `admin` | Everything a leader can do, plus `create_project`, `create_module`, `set_token_hash`, and leaving `pending_approval`. |
 | Leader | Role `pm`, `po`, `lead`, or admin | `create_feature`, `assign_task`, `list_alerts`, and status, notes, blockers, and link edits on tasks assigned to someone else. |
 | `pm` or admin | Role `pm`, or admin | Moving an existing task into `pending_approval`. Other leaders cannot. |
-| Assignee | `assignee_id` is the caller | `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `update_task`, `set_request`, `add_attachment`, and output links on that task. |
+| Assignee | `assignee_id` is the caller | `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `update_task`, `set_agent`, `set_request`, `add_attachment`, and output links on that task. |
 | Any member | Any active bot or mapped UI member | `create_task`, `whoami`, `list_my_tasks`, `get_task`, `get_request`, `list_attachments`, `get_task_timeline`, `get_project_overview`. |
 
-A reviewer is not granted `report_status` by `reviewer_id` alone. The reviewer needs to be the assignee or a leader. `list_my_tasks` with `role: "reviewer"` or `role: "any"` lists tasks where the caller is the reviewer.
+A reviewer is not granted `report_status` by `reviewer_id` alone. The reviewer needs to be the assignee or a leader. The reviewer can call `set_agent` on that task. `list_my_tasks` with `role: "reviewer"` or `role: "any"` lists tasks where the caller is the reviewer.
 
-`get_task` marks leadership feedback read when the caller is the current assignee. A later assignee sees the same notes as unread again.
+`get_task` marks leadership feedback read when the caller is the current assignee, and clears the open `LEADERSHIP_FEEDBACK` alert on that task. A later assignee sees the same notes as unread again. `list_my_tasks` includes a task outside the status filter when the caller is the assignee and feedback is still unread.
 
 ## Alerts
 
@@ -112,8 +112,9 @@ The cron runs every five minutes and is safe to run twice. At most one open aler
 | `STALE` | Status is `in_progress` and working time since `last_update_at` is at least `stale_hours` (default 4). Working time is 08:00 inclusive to 22:00 exclusive in the configured offset. |
 | `BLOCKED_LONG` | Status is `blocked` and an open blocker was opened at least `blocked_hours` ago (default 2), by the wall clock. |
 | `OVERDUE` | `due_at` is in the past and the status is not `done`, `cancelled`, or `pending_approval`. |
+| `LEADERSHIP_FEEDBACK` | A person listed in `LEADERSHIP_AUTHORS` left feedback. One open alert per task, including `pending_approval` and `backlog`. The cron does not open or clear this rule. |
 
-An alert clears when its condition no longer holds. `add_note` and `report_status` clear `STALE` for that task. Reassigning an `assigned` task clears `NOT_STARTED`.
+An alert clears when its condition no longer holds. `add_note` and `report_status` clear `STALE` for that task. Reassigning an `assigned` task clears `NOT_STARTED`. The assignee's `get_task` clears `LEADERSHIP_FEEDBACK`. A later note opens it again.
 
 Thresholds and the timezone are in [configuration](configuration.md).
 
@@ -127,6 +128,6 @@ A click on a card opens the task in a drawer. `/t/:code` is still the full page,
 
 In `token` mode a browser without a session is sent to `/login`, and the header includes Log out. In `access` mode there is no login page. The Worker expects the Access JWT. Writes from either session use the mapped member, not a name typed into the form.
 
-`/t/:code` shows the request document, attachments, reviewer, pull-request URL, links, due date, time in each status, blockers, feedback, and history, split across the four tabs. A mapped member (see `UI_MEMBER_EMAILS` in [configuration](configuration.md)) who is the assignee or a leader can edit the request, attachments, output links, PR URL, links, reviewer, and due date in place. A leader can also edit the assignee and a feature's priority. A session listed in `LEADERSHIP_AUTHORS` can post feedback. The stored author is the configured display name. Feedback is not an MCP tool. Bots read it from `get_task` and see `unread_feedback_count` on `list_my_tasks`. Each feedback row shows the request version and outputs it applies to.
+`/t/:code` shows the request document, attachments, reviewer, pull-request URL, links, the linked agent, due date, time in each status, blockers, feedback, and history, split across the four tabs. The Agent block shows the https link (new tab) and the status. A Cursor URL (`https://cursor.com/agents/bc-…`) is refreshed from the Cursor API when the `CURSOR_API_KEY` secret is set. The key is not sent to the browser. Without the key, or when the lookup fails, the block shows `agent_status` and `agent_updated_at` from `set_agent`, formatted in the configured timezone. A mapped member (see `UI_MEMBER_EMAILS` in [configuration](configuration.md)) who is the assignee or a leader can edit the request, attachments, output links, PR URL, links, reviewer, and due date in place. A leader can also edit the assignee and a feature's priority. A session listed in `LEADERSHIP_AUTHORS` can post feedback. The stored author is the configured display name. Feedback is not an MCP tool. Bots read it from `get_task` and see `unread_feedback_count` on `list_my_tasks`. Each feedback row shows the request version and outputs it applies to.
 
 `GET /api/board` returns the same filtered cards as JSON. The signed-in page polls it every 60 seconds and updates the board in place. Timestamps are stored as epoch milliseconds UTC and shown as day/month and hour:minute in the configured offset.

@@ -171,11 +171,13 @@ Result fields: `id`, `name`, `role`, `admin`, `leader`, `open_tasks`, `alerts`.
 
 ### list_my_tasks
 
-Tasks for the caller, plus open alerts. Each task includes `role` (`assignee`, `reviewer`, or `both`), `in_status`, and `unread_feedback_count`.
+Tasks for the caller, plus open alerts. Each task includes `role` (`assignee`, `reviewer`, or `both`), `in_status`, `unread_feedback_count`, `agent_url`, `agent_status`, and `agent_updated_at` (epoch milliseconds, or null).
+
+A task the caller is assigned to, with unread leadership feedback, is included even when its status is outside the filter. That covers `pending_approval`, `backlog`, and any other status you did not ask for.
 
 | Argument | Required | Rule |
 |---|---|---|
-| `status` | no | One status, or an array of statuses. Omitted means `assigned`, `in_progress`, `review`, and `blocked`. |
+| `status` | no | One status, or an array of statuses. Omitted means `assigned`, `in_progress`, `review`, and `blocked`. Unread feedback for the assignee is still returned. |
 | `role` | no | `assignee` (default), `reviewer`, or `any`. |
 | `limit` | no | Integer 1–200. Default 50. |
 | `offset` | no | Integer ≥ 0. Default 0. |
@@ -302,6 +304,38 @@ The assignee or a leader.
 
 Result fields: `code`, `status`.
 
+### set_agent
+
+Attach or clear the cloud agent working on a task. This does not change the task status.
+
+The assignee, the reviewer, or a leader (`pm`, `po`, `lead`, or admin). Anyone else receives 403.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+| `agent_url` | one of `agent_url` or `status` | https URL, at most 500 characters. `null` or `""` clears it. Any other scheme is `BAD_REQUEST`. A Cursor cloud agent uses `https://cursor.com/agents/bc-…` so the task page can load live status. |
+| `status` | one of `agent_url` or `status` | Status string reported by the bot, at most 64 characters. `null` or `""` clears it. |
+
+Omit a field to leave it unchanged. Call this when the agent is opened, and call it with both fields null when the agent stops.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "set_agent",
+    "arguments": {
+      "task": "APP-CORE-001.1",
+      "agent_url": "https://cursor.com/agents/bc-11111111-2222-3333-4444-555555555555",
+      "status": "RUNNING"
+    }
+  }
+}
+```
+
+Result fields: `code`, `agent_url`, `agent_status`, `agent_updated_at`.
+
 ### set_blocker
 
 Open a blocker and move the task to `blocked`. Allowed from `assigned`, `in_progress`, or `blocked`.
@@ -361,7 +395,7 @@ Result fields: `code`, `status`.
 
 ### get_task
 
-Task detail, the 10 latest updates, blockers, open alerts, leadership feedback, and time in each status. Periods use epoch milliseconds UTC. When the assignee calls this, unread feedback is marked read. The returned `feedback[].unread` is the value from before that write.
+Task detail, the 10 latest updates, blockers, open alerts, leadership feedback, and time in each status. Periods use epoch milliseconds UTC. `task` includes `agent_url`, `agent_status`, and `agent_updated_at`. When the assignee calls this, unread feedback is marked read and the open `LEADERSHIP_FEEDBACK` alert is cleared. The returned `feedback[].unread` is the value from before that write.
 
 Any authenticated member.
 
@@ -381,7 +415,7 @@ Any authenticated member.
 }
 ```
 
-Result fields: `task` (including `reviewer_id` and the request columns), `request` (latest version, or `version: null` when none exists), `attachments` (`requirement`, `output`, `output_links`), `attachments_configured`, `current_status`, `time_in_status`, `periods`, `updates`, `blockers`, `alerts`, `feedback`.
+Result fields: `task` (including `reviewer_id`, `agent_url`, `agent_status`, `agent_updated_at`, and the request columns), `request` (latest version, or `version: null` when none exists), `attachments` (`requirement`, `output`, `output_links`), `attachments_configured`, `current_status`, `time_in_status`, `periods`, `updates`, `blockers`, `alerts`, `feedback`.
 
 `request` has `version`, `author_id`, `at`, `note`, and `markdown`. `attachments` lists each file's id, name, version count, latest version, MIME type, and size. `attachments_configured` is false when the R2 binding is absent. Each update and each feedback entry includes `request_version` and `output_ref` (parsed). `output_ref` is null when that row did not record one.
 

@@ -57,7 +57,13 @@
     "UI_MEMBER_EMAILS": "you@example.com=admin",
     // LEADERSHIP_AUTHORS: comma-separated email=Display Name pairs.
     // Only these sessions can post leadership feedback. The display name is what gets stored.
+    // A note from one of these authors opens one LEADERSHIP_FEEDBACK alert on that task.
     "LEADERSHIP_AUTHORS": "you@example.com=Owner",
+    // CURSOR_API_KEY: optional secret for live cloud-agent status on the task page.
+    // Set with `wrangler secret put CURSOR_API_KEY`. Do not put the key in this file.
+    // When set, a https://cursor.com/agents/bc-… link is loaded with
+    // GET https://api.cursor.com/v0/agents/{id}. The key never reaches the browser.
+    // When unset, the page shows the status stored by set_agent.
     // Optional alert overrides. Leave a variable unset to use the settings table.
     // Defaults (migration 0001, overridable in SQL): not_started_minutes=15, stale_hours=4,
     // stale_work_start_hour=8, stale_work_end_hour=22, blocked_hours=2, tz_offset_minutes=0 (UTC).

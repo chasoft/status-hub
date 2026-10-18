@@ -1,4 +1,5 @@
 // Server-rendered dashboard. Behaviour lives in /assets/dashboard.js (no inline handlers).
+import { loadCursorAgent, type LiveAgent } from "./agent";
 import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
 import { isImageMime, listAttachments } from "./attachments";
@@ -42,6 +43,7 @@ const STATUS_LABEL: Record<Status, string> = {
 const BOARD_COLS: Status[] = ["pending_approval", "backlog", "assigned", "in_progress", "review", "blocked", "done"];
 const RULE_LABEL: Record<string, string> = {
   NOT_STARTED: "Not started", STALE: "Stale", BLOCKED_LONG: "Blocked too long", OVERDUE: "Overdue",
+  LEADERSHIP_FEEDBACK: "Leadership feedback",
 };
 const AVATAR_COLORS = ["#0e6b4f", "#1d4e89", "#6b3fa0", "#8a5a12", "#a33b32", "#0f6e6e", "#3d5a80"];
 const DONE_PREVIEW = 10;
@@ -64,6 +66,35 @@ export function externalAnchor(href: string, label?: string): string {
   const text = label ?? href;
   const tip = text !== href ? ` title="${esc(href)}"` : "";
   return `<a href="${esc(href)}"${tip} target="_blank" rel="noopener noreferrer">${esc(text)}<span class="ext-icon">${EXT_ICON}<span class="sr"> (opens in a new tab)</span></span></a>`;
+}
+
+function httpsHref(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    return new URL(raw).protocol === "https:" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function agentBlock(full: { agent_url: string | null; agent_status: string | null; agent_updated_at: number | null }, live: LiveAgent | null, tz: number): string {
+  const url = full.agent_url;
+  const reported = full.agent_status;
+  const safe = url ? httpsHref(url) : null;
+  const link = safe ? externalAnchor(safe) : (url ? esc(url) : "—");
+  if (!url && !reported && !live) {
+    return `<section class="panel" id="agent"><div class="panel-h"><h3>Agent</h3></div><p class="empty">—</p></section>`;
+  }
+  const rows = [`<tr><th scope="row">Link</th><td>${link}</td></tr>`];
+  if (live) {
+    rows.push(`<tr><th scope="row">Status</th><td><span class="pill">${esc(live.status)}</span></td></tr>`);
+    if (live.summary) rows.push(`<tr><th scope="row">Summary</th><td>${esc(live.summary)}</td></tr>`);
+    if (live.prUrl) rows.push(`<tr><th scope="row">Pull request</th><td>${externalAnchor(live.prUrl)}</td></tr>`);
+  } else {
+    rows.push(`<tr><th scope="row">Status</th><td>${reported ? `<span class="pill">${esc(reported)}</span>` : "—"}</td></tr>`);
+    rows.push(`<tr><th scope="row">Updated</th><td>${fmt(full.agent_updated_at, tz)}</td></tr>`);
+  }
+  return `<section class="panel" id="agent"><div class="panel-h"><h3>Agent</h3></div><table class="fields"><tbody>${rows.join("")}</tbody></table></section>`;
 }
 
 function linkList(json: string | null): string {
@@ -961,7 +992,7 @@ function versionOptions(versions: { version: number }[], selected: number | null
   return versions.map((item) => `<option value="${item.version}"${item.version === selected ? " selected" : ""}>v${item.version}</option>`).join("");
 }
 
-async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL): Promise<string | null> {
+async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL, apiKey?: string): Promise<string | null> {
   const t = await db.prepare(`${CARD_SQL} WHERE t.code = ?`).bind(code).first<CardRow>();
   if (!t) return null;
   const full = await db.prepare("SELECT * FROM tasks WHERE code = ?").bind(code).first<Record<string, unknown>>();
@@ -974,6 +1005,12 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
     db.prepare("SELECT id FROM members WHERE active = 1 ORDER BY id"),
   ]);
   const tz = (await loadSettings(db)).tz_offset_minutes;
+  const agent = {
+    agent_url: typeof full.agent_url === "string" ? full.agent_url : null,
+    agent_status: typeof full.agent_status === "string" ? full.agent_status : null,
+    agent_updated_at: typeof full.agent_updated_at === "number" ? full.agent_updated_at : null,
+  };
+  const live = agent.agent_url ? await loadCursorAgent(apiKey, agent.agent_url) : null;
   const row = asCards([t])[0]!;
   const actor = await memberForAccessEmail(db, email);
   const canEdit = !!actor && (isLeader(actor) || actor.id === row.assignee_id);
@@ -1121,7 +1158,8 @@ ${fieldRow("Due", inlineEdit({ action, name: "due_at", label: "Due", kind: "time
 ${fieldRow("Done at", fmt(full.done_at as number | null, tz))}
 ${fieldRow("PR", inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: prValue, display: prValue ? externalAnchor(prValue) : "", editable: canEdit, error: fieldError("pr_url"), draft: fieldDraft("pr_url", prValue), inputType: "url" }))}
 ${fieldRow("Links", inlineEdit({ action, name: "links", label: "Links", kind: "links", value: linkValue, display: linkDisplay, editable: canEdit, error: fieldError("links"), draft: fieldDraft("links", linkValue) }))}
-</tbody></table></div>
+</tbody></table>
+${agentBlock(agent, live, tz)}</div>
 <section class="feedback-pane"><h3 class="sheet-h">Feedback</h3><div class="sheet-scroll">${feedbackTable}</div></section>
 ${feedbackForm}`;
   const historyTable = `<table><thead><tr><th>When</th><th>Who</th><th>Status</th><th>Note</th></tr></thead><tbody>${updates.map((x) => `<tr><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}</tbody></table>`;
@@ -1136,8 +1174,8 @@ ${taskDialogs}
 </div>`;
 }
 
-export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL) {
-  const detail = await taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl);
+export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL, apiKey?: string) {
+  const detail = await taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl, apiKey);
   if (!detail) return null;
   const task = await db.prepare("SELECT project_code FROM tasks WHERE code = ?").bind(code).first<{ project_code: string }>();
   const url = new URL(`https://local/?project=${encodeURIComponent(task?.project_code ?? "")}`);
@@ -1146,8 +1184,8 @@ export async function renderTask(db: D1Database, code: string, email: string, no
   return shell(code, `<p class="back"><a href="${esc(back)}">Back to board</a></p>${detail}`, email, chrome, "task", false);
 }
 
-export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL) {
-  return taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl);
+export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL, apiKey?: string) {
+  return taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl, apiKey);
 }
 
 export async function renderProject(db: D1Database, code: string, email: string) {

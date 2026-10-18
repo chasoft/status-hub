@@ -129,6 +129,9 @@ export interface TaskRow {
   requested_by: string | null;
   requested_at: number | null;
   request_link: string | null;
+  agent_url: string | null;
+  agent_status: string | null;
+  agent_updated_at: number | null;
 }
 
 export async function getTaskRow(db: D1Database, code: string): Promise<TaskRow> {
@@ -142,6 +145,29 @@ export function canEditTask(m: Member, t: { assignee_id: string | null }) {
 }
 function canTouchTask(m: Member, t: TaskRow) {
   return canEditTask(m, t);
+}
+
+/** Assignee, reviewer, or the same leaders who can already edit the task. */
+function canSetAgent(m: Member, t: TaskRow) {
+  return canTouchTask(m, t) || t.reviewer_id === m.id;
+}
+
+const AGENT_STATUS_MAX = 64;
+
+/** https only. Empty means clear. */
+function explicitHttpsUrl(raw: string | null | undefined, label: string): string | null {
+  if (raw == null || raw.trim() === "") return null;
+  const u = raw.trim();
+  let protocol = "";
+  try {
+    protocol = new URL(u).protocol;
+  } catch {
+    protocol = "";
+  }
+  if (!u || u.length > 500 || protocol !== "https:") {
+    throw new AppError("BAD_REQUEST", `${label} must be an https URL`);
+  }
+  return u;
 }
 
 export const REQUEST_MAX = 50_000;
@@ -554,6 +580,42 @@ export async function updateTask(db: D1Database, actor: Member, p: {
   return { code: t.code, pr_url: pr !== undefined ? pr : t.pr_url };
 }
 
+/**
+ * Attach or clear the cloud agent working this task. Does not change task status.
+ * Omitted fields stay as they are. null or "" clears that field.
+ */
+export async function setAgent(db: D1Database, actor: Member, p: {
+  task: string; agent_url?: string | null; status?: string | null;
+}, now = Date.now()) {
+  const t = await getTaskRow(db, p.task);
+  if (!canSetAgent(actor, t)) {
+    throw new AppError("FORBIDDEN", "only the assignee, reviewer, or a leader (pm, po, lead, admin) can set the agent");
+  }
+  if (p.agent_url === undefined && p.status === undefined) {
+    throw new AppError("BAD_REQUEST", "provide agent_url or status");
+  }
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  let agent_url = t.agent_url;
+  let agent_status = t.agent_status;
+  if (p.agent_url !== undefined) {
+    agent_url = explicitHttpsUrl(p.agent_url, "agent_url");
+    sets.push("agent_url = ?");
+    binds.push(agent_url);
+  }
+  if (p.status !== undefined) {
+    const trimmed = p.status?.trim() ?? "";
+    if (trimmed.length > AGENT_STATUS_MAX) throw new AppError("BAD_REQUEST", `status is longer than ${AGENT_STATUS_MAX} characters`);
+    agent_status = trimmed || null;
+    sets.push("agent_status = ?");
+    binds.push(agent_status);
+  }
+  sets.push("agent_updated_at = ?");
+  binds.push(now);
+  await db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE code = ?`).bind(...binds, t.code).run();
+  return { code: t.code, agent_url, agent_status, agent_updated_at: now };
+}
+
 /** Kanban create form. The UI session has no member id; record it as an admin (is_admin). */
 export async function createTaskFromUi(db: D1Database, p: Parameters<typeof createTask>[2], now = Date.now()) {
   const actor = await db.prepare(
@@ -835,19 +897,25 @@ export async function listMyTasks(db: D1Database, m: Member, statusOrQuery?: Sta
   const who = q.role === "assignee" ? "assignee_id = ?"
     : q.role === "reviewer" ? "reviewer_id = ?"
       : "(assignee_id = ? OR reviewer_id = ?)";
+  const unreadFeedback = `(SELECT COUNT(*) FROM feedback f WHERE f.task_code = tasks.code
+         AND (f.read_by IS NULL OR f.read_by != tasks.assignee_id))`;
   const sql = `SELECT code, title, status, assignee_id, reviewer_id, assigned_at, last_update_at, due_at,
+      agent_url, agent_status, agent_updated_at,
       CASE WHEN assignee_id = ? AND reviewer_id = ? THEN 'both'
            WHEN assignee_id = ? THEN 'assignee' ELSE 'reviewer' END AS role,
       (SELECT p.started_at FROM status_periods p WHERE p.task_code = tasks.code AND p.ended_at IS NULL) AS status_since,
-      (SELECT COUNT(*) FROM feedback f WHERE f.task_code = tasks.code
-         AND (f.read_by IS NULL OR f.read_by != tasks.assignee_id)) AS unread_feedback_count
-    FROM tasks WHERE ${who} AND status IN (${q.statuses.map(() => "?").join(",")})
+      ${unreadFeedback} AS unread_feedback_count
+    FROM tasks WHERE ${who} AND (
+      status IN (${q.statuses.map(() => "?").join(",")})
+      OR (assignee_id = ? AND ${unreadFeedback} > 0)
+    )
     ORDER BY last_update_at DESC, code DESC LIMIT ? OFFSET ?`;
   const binds: unknown[] = [m.id, m.id, m.id];
-  binds.push(...(q.role === "any" ? [m.id, m.id] : [m.id]), ...q.statuses, q.limit, q.offset);
+  binds.push(...(q.role === "any" ? [m.id, m.id] : [m.id]), ...q.statuses, m.id, q.limit, q.offset);
   const { results } = await db.prepare(sql).bind(...binds).all<{
     code: string; title: string; status: Status; assignee_id: string | null; reviewer_id: string | null;
     assigned_at: number | null; last_update_at: number; due_at: number | null;
+    agent_url: string | null; agent_status: string | null; agent_updated_at: number | null;
     role: "assignee" | "reviewer" | "both"; status_since: number | null; unread_feedback_count: number;
   }>();
   const tasks = results.map((r) => {
@@ -868,9 +936,13 @@ export async function addLeadershipFeedback(db: D1Database, p: {
   const note = clipNote(p.note);
   if (!note) throw new AppError("BAD_REQUEST", "note trống");
   const snap = await reviewSnapshot(db, p.task, []);
-  await db.prepare(
-    "INSERT INTO feedback (task_code, author, note, at, request_version, output_ref) VALUES (?, ?, ?, ?, ?, ?)",
-  ).bind(p.task, p.author, note, now, snap.request_version, outputRefJson(snap)).run();
+  await db.batch([
+    db.prepare(
+      "INSERT INTO feedback (task_code, author, note, at, request_version, output_ref) VALUES (?, ?, ?, ?, ?, ?)",
+    ).bind(p.task, p.author, note, now, snap.request_version, outputRefJson(snap)),
+    db.prepare(`INSERT INTO alerts (task_code, rule, fired_at) VALUES (?, 'LEADERSHIP_FEEDBACK', ?)
+                ON CONFLICT (task_code, rule) WHERE cleared_at IS NULL DO NOTHING`).bind(p.task, now),
+  ]);
   return { code: p.task, author: p.author, at: now, request_version: snap.request_version, output_ref: outputRefJson(snap) };
 }
 
@@ -907,9 +979,14 @@ export async function getTask(db: D1Database, code: string, now = Date.now(), re
   }));
   // Only the current assignee's read clears the flag. Return the marker from before that write.
   if (reader && t.assignee_id && reader.id === t.assignee_id && rows.some((r) => unread(r.read_by))) {
-    await db.prepare(
-      "UPDATE feedback SET read_at = ?, read_by = ? WHERE task_code = ? AND (read_by IS NULL OR read_by != ?)",
-    ).bind(now, reader.id, code, reader.id).run();
+    await db.batch([
+      db.prepare(
+        "UPDATE feedback SET read_at = ?, read_by = ? WHERE task_code = ? AND (read_by IS NULL OR read_by != ?)",
+      ).bind(now, reader.id, code, reader.id),
+      db.prepare(
+        "UPDATE alerts SET cleared_at = ? WHERE task_code = ? AND rule = 'LEADERSHIP_FEEDBACK' AND cleared_at IS NULL",
+      ).bind(now, code),
+    ]);
   }
   const periods = summarizePeriods(sp.results as unknown as PeriodRow[], now);
   const request = await getRequestDocument(db, code);

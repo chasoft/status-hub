@@ -23,6 +23,8 @@ export interface Env extends AuthEnv, ConfigEnv {
   ATTACHMENTS?: R2Bucket;
   ATTACHMENT_MAX_BYTES?: string;
   ATTACHMENT_ALLOWED_MIME?: string;
+  /** Worker secret. The task page uses it server-side. It is never sent to the browser. */
+  CURSOR_API_KEY?: string;
 }
 
 const SEC_HEADERS = {
@@ -104,7 +106,7 @@ async function postTaskEdit(req: Request, env: Env, code: string, email: string)
     if (jsonMode) return json({ error: e.message }, e.httpStatus);
     if (e.code === "NOT_FOUND") return text(404, e.message);
     if (e.code === "FORBIDDEN") return text(403, e.message);
-    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field, value: raw, pr_url: field === "pr_url" ? raw : undefined }, null, !!env.ATTACHMENTS);
+    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field, value: raw, pr_url: field === "pr_url" ? raw : undefined }, null, !!env.ATTACHMENTS, undefined, env.CURSOR_API_KEY);
     return page ? html(page, e.httpStatus) : text(404, "Not found");
   }
   if (jsonMode) return json({ ok: true });
@@ -196,7 +198,7 @@ async function postAttachment(req: Request, env: Env, code: string, email: strin
     }, policy);
   } catch (e) {
     if (!(e instanceof AppError)) throw e;
-    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field: "attachment" }, "overview", !!env.ATTACHMENTS);
+    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field: "attachment" }, "overview", !!env.ATTACHMENTS, undefined, env.CURSOR_API_KEY);
     return page ? html(page, e.httpStatus) : text(e.httpStatus, e.message);
   }
   return new Response(null, { status: 303, headers: { location: `/t/${encodeURIComponent(code)}?tab=overview`, ...SEC_HEADERS } });
@@ -219,7 +221,7 @@ async function postOutputLink(req: Request, env: Env, code: string, email: strin
     await addOutputLink(env.DB, actor, { task: code, url, note });
   } catch (e) {
     if (!(e instanceof AppError)) throw e;
-    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field: "output_link", value: url }, "overview", !!env.ATTACHMENTS);
+    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field: "output_link", value: url }, "overview", !!env.ATTACHMENTS, undefined, env.CURSOR_API_KEY);
     return page ? html(page, e.httpStatus) : text(e.httpStatus, e.message);
   }
   return new Response(null, { status: 303, headers: { location: `/t/${encodeURIComponent(code)}?tab=overview`, ...SEC_HEADERS } });
@@ -424,10 +426,10 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
     const tab = url.searchParams.get("tab");
     const filesOn = !!env.ATTACHMENTS;
     if (url.searchParams.has("fragment")) {
-      const frag = await ui.renderTaskFragment(env.DB, m[1], email, Date.now(), undefined, tab, filesOn, url);
+      const frag = await ui.renderTaskFragment(env.DB, m[1], email, Date.now(), undefined, tab, filesOn, url, env.CURSOR_API_KEY);
       return frag ? html(frag) : text(404, "Not found");
     }
-    out = await ui.renderTask(env.DB, m[1], email, Date.now(), undefined, tab, filesOn, url);
+    out = await ui.renderTask(env.DB, m[1], email, Date.now(), undefined, tab, filesOn, url, env.CURSOR_API_KEY);
   }
   else if ((m = path.match(/^\/p\/([A-Z]{2,5})$/))) out = await ui.renderProject(env.DB, m[1], email);
   else if ((m = path.match(/^\/m\/([a-z0-9-]{1,32})$/))) out = await ui.renderMember(env.DB, m[1], email);
