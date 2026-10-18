@@ -351,13 +351,14 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 dialog.file-dialog{max-width:min(440px,calc(100vw - 32px))}
 dialog.lightbox{width:min(96vw,1100px);max-width:min(96vw,1100px);max-height:96dvh;border-radius:var(--radius)}
 dialog.lightbox[open]{display:flex;flex-direction:column;overflow:hidden;height:min(96dvh,920px)}
-.lb-bar,.lb-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:16px}
+.lb-bar,.lb-tools:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:16px}
 .lb-bar{border-bottom:1px solid var(--bd);flex:none}
 .lb-bar h2{margin:0;font-size:15px;flex:1;min-width:8rem}
-.lb-tools{padding-top:0;flex:none}
+.lb-tools:not([hidden]){padding-top:0;flex:none}
 .lb-tools select,.lb-version select{width:auto;min-width:4.5rem}
-.lb-version{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px}
+.lb-version:not([hidden]){display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px}
 .lb-stage{margin:0 16px 16px;height:min(72dvh,760px);min-height:240px;background:var(--cell);border-radius:var(--radius);position:relative;overflow:hidden;display:flex;flex-direction:column;flex:1}
+.lb-stage.lb-doc{margin:0;background:var(--card)}
 .lb-scroll{flex:1;min-height:0;overflow:auto;padding:16px;overscroll-behavior:contain}
 .lb-code{margin:0;font:13px/1.45 ui-monospace,SFMono-Regular,monospace;white-space:pre;tab-size:2}
 .lb-table{font:13px/1.4 ui-monospace,SFMono-Regular,monospace}

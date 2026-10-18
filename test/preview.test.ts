@@ -242,6 +242,8 @@ describe("preview endpoint", () => {
     expect(taskPage).toContain(`/t/${code}/attachments/${brief.id}/preview?v=2`);
     expect(taskPage).toContain("data-lb-open=");
     expect(taskPage).toContain('id="lb-version"');
+    expect(taskPage).toContain(".lb-tools:not([hidden])");
+    expect(taskPage).toContain(".lb-stage.lb-doc{margin:0;background:var(--card)}");
     expect(taskPage).toContain("This file can't be previewed.");
     expect(taskPage).toContain("Showing the first 1 MB.");
     expect(taskPage).not.toContain("attach-preview");
@@ -249,5 +251,7 @@ describe("preview endpoint", () => {
     expect(script).toContain("data-lb-view");
     expect(script).toContain("hl-key");
     expect(script).toContain("lb-table");
+    expect(script).toContain("tools.hidden = !comparing");
+    expect(script).toContain('classList.toggle("lb-doc"');
   });
 });

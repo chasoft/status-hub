@@ -834,7 +834,9 @@ export const DASHBOARD_JS = `
     if ((!image && !textual) || !multi) {
       if (lbMode === "split" || lbMode === "side" || lbMode === "diff") lbMode = "single";
     }
-    if (tools) tools.hidden = !(multi && (image || lbMode === "diff"));
+    const comparing = multi && lbMode !== "single";
+    if (tools) tools.hidden = !comparing;
+    stage.classList.toggle("lb-doc", kind !== "image" && kind !== "pdf" && kind !== "video");
     if (splitBtn instanceof HTMLButtonElement) splitBtn.hidden = !(image && multi);
     if (sideBtn instanceof HTMLButtonElement) sideBtn.hidden = !(image && multi);
     if (diffBtn instanceof HTMLButtonElement) diffBtn.hidden = !(textual && multi);
