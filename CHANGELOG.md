@@ -6,6 +6,9 @@ All notable changes to Status Hub are documented in this file. The project follo
 
 ### Added
 
+- Member webhooks, so bots are woken instead of polling. An admin registers one https URL per member, with an optional header name and secret (for example a bot's sender key), through `set_member_webhook` or inline on the Members page. The secret is write-only and is AES-GCM encrypted in D1 when the optional `WEBHOOK_SECRET_KEY` secret is set. The task's assignee gets a short JSON POST for `feedback.added`, `task.assigned`, and `blocker.resolved` (not for their own actions). Events go through a `webhook_outbox` table, are sent right away with `ctx.waitUntil` (5 second timeout), retried by the five-minute cron up to 5 attempts, and then raise a `WEBHOOK_FAILED` alert on the task. `list_webhooks` and `test_member_webhook` help admins check delivery. Migration `0013_member_webhooks.sql`.
+- `set_reviewer` MCP tool (admin): change or clear a task's reviewer without changing its status.
+
 - `APP_VERSION` (optional var) is shown at the bottom of the sidebar as `v<value>`, or `vdev` when unset. The dashboard script is loaded as `/assets/dashboard.js?v=<value>`, so a tab opened before a deploy fetches the new script after reload instead of running the old one. Self-hosters can set it with `pnpm run deploy -- --var APP_VERSION:1.0.$(git rev-list --count HEAD)`.
 - `set_agent` stores `agent_url`, `agent_status`, and `agent_updated_at` on a task. The assignee, reviewer, or a leader can set or clear an https link. `get_task` and `list_my_tasks` return the three fields. The task page and drawer show an Agent block. With the `CURSOR_API_KEY` secret, a `https://cursor.com/agents/bc-…` link is loaded from the Cursor Cloud Agents API (6 second timeout, 64 KB cap, 30 second cache, including failed lookups). The key is not sent to the browser. A missing key or a failed lookup shows the stored status in the configured timezone.
 - Leadership feedback opens one `LEADERSHIP_FEEDBACK` alert per task. The assignee's `get_task` clears it. `list_my_tasks` includes the assignee's tasks that still have unread feedback even when the status filter would omit them. Migration `0011_leadership_feedback_alert.sql` allows the rule. Migration `0012_task_agent.sql` adds the agent columns.
@@ -21,6 +24,10 @@ All notable changes to Status Hub are documented in this file. The project follo
 - `pnpm run ui-login` (`scripts/gen-ui-login.mjs`) mints a UI login token locally and prints the SQL for the hash.
 - Migration `0008_ui_login.sql`.
 - `pnpm run setup` creates or reuses the D1 database (and optional staging), writes gitignored `wrangler.local.jsonc`, applies migrations, creates the first admin, and prints a one-time MCP token. `pnpm run deploy` deploys that local config. Flags and `STATUS_HUB_*` variables cover the same prompts for CI. With `--auth-mode token`, setup runs `wrangler secret put AUTH_SESSION_SECRET` using a generated value and prints a one-time UI login token for the admin email. Only the SHA-256 is stored.
+
+### Fixed
+
+- `resolve_blocker` no longer reopens a task that is not `blocked`. Resolving a leftover blocker on a `cancelled` or `done` task closes the blocker and keeps the status.
 
 ## 0.1.0 - 2026-10-17
 

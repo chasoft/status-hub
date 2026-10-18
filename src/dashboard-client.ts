@@ -78,6 +78,10 @@ export const DASHBOARD_JS = `
       slot.textContent = "—";
       return;
     }
+    if (kind === "secret") {
+      slot.textContent = "set";
+      return;
+    }
     if (kind === "url") {
       const short = form.closest("table.tasks") ? prShortLabel(value) : "";
       slot.innerHTML = externalHtml(value, short && short !== value ? short : "");
@@ -1370,8 +1374,15 @@ export const DASHBOARD_JS = `
             return;
           }
           const value = field && "value" in field ? String(field.value) : "";
-          if (field) field.setAttribute("data-original", value);
-          paintValue(form, value.trim());
+          const secret = form.getAttribute("data-inline-kind") === "secret";
+          if (!value.trim() && (form.getAttribute("action") || "").indexOf("/members/") === 0) {
+            // Clearing a webhook URL also clears its header and secret.
+            location.reload();
+            return;
+          }
+          if (field) field.setAttribute("data-original", secret ? "" : value);
+          paintValue(form, secret ? value : value.trim());
+          if (secret && field && "value" in field) field.value = "";
           closeEdit(form, false);
           if (page === "board") poll();
         })

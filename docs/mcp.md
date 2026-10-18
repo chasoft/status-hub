@@ -370,7 +370,7 @@ Result fields: `blocker_id`, `code`, `status` (`blocked`).
 
 ### resolve_blocker
 
-Close one blocker. When none remain, the task moves to `in_progress`, including when it was `assigned` before the blocker. It stays `blocked` when another blocker is open.
+Close one blocker. When none remain, a `blocked` task moves to `in_progress`, including when it was `assigned` before the blocker. It stays `blocked` when another blocker is open. A task that is not `blocked` (for example a `cancelled` or `done` task with a leftover blocker) keeps its status; only the blocker is closed. When someone other than the assignee resolves it, the assignee's webhook gets `blocker.resolved` (see [Webhooks](configuration.md#webhooks)).
 
 The assignee or a leader.
 
@@ -697,6 +697,44 @@ printf '%s' "$STATUS_HUB_TOKEN" | sha256sum
 ```
 
 `pnpm run token <member-id>` prints a ready-to-run Wrangler statement for the same hash.
+
+### set_reviewer
+
+Set or change a task's reviewer without changing its status. Admin only. Use it to move a self-reviewed task to another member.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+| `reviewer` | yes | Active member id. An empty string clears the reviewer. |
+
+Result fields: `code`, `reviewer_id`.
+
+### set_member_webhook
+
+Set or clear a member's outbound webhook. Admin only. See [Webhooks](configuration.md#webhooks) for the events and the request format.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `member` | yes | Active member id. |
+| `url` | no | `https` URL without credentials, up to 500 characters. `null` or `""` removes the webhook, its header, and its secret. |
+| `header_name` | no | HTTP header that carries the secret, for example `X-Api-Key`. Omitted keeps it; `""` clears it. Required when a secret is set. |
+| `secret` | no | Up to 1024 characters, no control characters. Write-only. Omitted keeps it; `""` clears it. |
+
+Result fields: `member`, `webhook_url`, `header_name`, `secret` (`set` or `none`). The secret itself is never returned.
+
+### list_webhooks
+
+Admin only. No arguments. Returns `webhooks[]` with `member`, `webhook_url`, `header_name`, `secret` (`set` or `none`), `pending`, `failed`, `last_delivered_at`, and `last_error`.
+
+### test_member_webhook
+
+Admin only. Sends one `webhook.test` event to the member's webhook now. It is not retried.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `member` | yes | Member id with a webhook. |
+
+Result fields: `member`, `delivery_id`, `ok`, `status` (HTTP status or `null`), `error`.
 
 ### set_request
 

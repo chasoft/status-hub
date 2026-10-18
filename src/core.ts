@@ -1,6 +1,7 @@
 // Business logic for Status Hub. Pure functions over D1; no AI calls.
 // All timestamps are epoch ms UTC.
 import { getHubConfig, isPrivilegedId } from "./config";
+import { enqueueWebhook } from "./webhooks";
 
 export type Status =
   | "pending_approval" | "backlog" | "assigned" | "in_progress" | "review" | "blocked" | "done" | "cancelled";
@@ -552,7 +553,11 @@ export async function createTask(db: D1Database, actor: Member, p: {
     ).bind(f.code, requestMd, actor.id, now, scope)] : []),
   ]);
   const n = (res[1].results[0] as { next: number }).next;
-  return { code: `${f.code}.${n}`, status, pr_url: pr, request_version: requestMd ? 1 : null };
+  const code = `${f.code}.${n}`;
+  if (status === "assigned" && p.assignee && p.assignee !== actor.id) {
+    await notifyAssigned(db, { code, title: p.title, status }, p.assignee, actor.id, now);
+  }
+  return { code, status, pr_url: pr, request_version: requestMd ? 1 : null };
 }
 
 /**
@@ -648,7 +653,23 @@ export async function assignTask(db: D1Database, actor: Member, p: { task: strin
       ...periodStmts(db, t.code, "assigned", actor.id, now),
     ] : []),
   ]);
+  if (p.assignee !== actor.id && (p.assignee !== t.assignee_id || resetClock) && WAKE_ON_ASSIGN.has(t.status)) {
+    await notifyAssigned(db, t, p.assignee, actor.id, now);
+  }
   return { code: t.code, status: t.status, assignee: p.assignee };
+}
+
+/** Statuses where a new assignee has work to pick up. backlog waits for report_status → assigned. */
+const WAKE_ON_ASSIGN = new Set<Status>(["assigned", "in_progress", "review", "blocked"]);
+
+async function notifyAssigned(db: D1Database, t: { code: string; title: string; status: Status }, assignee: string, by: string, now: number) {
+  await enqueueWebhook(db, {
+    member: assignee,
+    task: { code: t.code, title: t.title, status: t.status },
+    event: "task.assigned",
+    text: `${t.code} "${t.title}" is assigned to you (${t.status}) by ${by}.`,
+    data: { assigned_by: by },
+  }, now);
 }
 
 /** Set or clear reviewer_id without a status change. Assignee or a leader. */
@@ -772,6 +793,9 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
     ...periodStmts(db, t.code, p.status, actor.id, now),
   ]);
   await clearResolvedAlerts(db, now, t.code);
+  if (p.status === "assigned" && (t.status === "backlog" || t.status === "pending_approval") && t.assignee_id && t.assignee_id !== actor.id) {
+    await notifyAssigned(db, { code: t.code, title: t.title, status: "assigned" }, t.assignee_id, actor.id, now);
+  }
   return {
     code: t.code, from: t.status, to: p.status, approved_by: approvedBy,
     reviewer_id: reviewerId ?? t.reviewer_id, alerts: await openAlertsFor(db, actor.id),
@@ -839,7 +863,9 @@ export async function resolveBlocker(db: D1Database, actor: Member, p: { id: num
   const note = clipNote(p.note);
   const remaining = await db.prepare("SELECT COUNT(*) AS n FROM blockers WHERE task_code = ? AND resolved_at IS NULL AND id != ?")
     .bind(t.code, b.id).first<{ n: number }>();
-  const next: Status = (remaining?.n ?? 0) > 0 ? "blocked" : "in_progress";
+  // Only a blocked task moves. A cancelled, done, or otherwise unblocked task keeps its status.
+  const left = remaining?.n ?? 0;
+  const next: Status = t.status !== "blocked" ? t.status : left > 0 ? "blocked" : "in_progress";
   await db.batch([
     db.prepare("UPDATE blockers SET resolved_at = ?, resolved_by = ?, resolution = ? WHERE id = ?").bind(now, actor.id, note, b.id),
     db.prepare("UPDATE tasks SET status = ?, last_update_at = ? WHERE code = ?").bind(next, now, t.code),
@@ -848,6 +874,20 @@ export async function resolveBlocker(db: D1Database, actor: Member, p: { id: num
     ...(next === t.status ? [] : periodStmts(db, t.code, next, actor.id, now)),
   ]);
   await clearResolvedAlerts(db, now, t.code);
+  if (t.status === "blocked" && t.assignee_id && t.assignee_id !== actor.id) {
+    const detail = await db.prepare("SELECT kind, waiting_on, detail FROM blockers WHERE id = ?").bind(b.id)
+      .first<{ kind: string; waiting_on: string; detail: string }>();
+    await enqueueWebhook(db, {
+      member: t.assignee_id,
+      task: { code: t.code, title: t.title, status: next },
+      event: "blocker.resolved",
+      text: `Blocker #${b.id} on ${t.code} was resolved by ${actor.id}${note ? `: ${note}` : ""}. ${left > 0 ? `${left} blocker(s) still open.` : `Task is ${next}.`}`,
+      data: {
+        blocker: { id: b.id, kind: detail?.kind ?? null, waiting_on: detail?.waiting_on ?? null, detail: detail?.detail ?? null, resolution: note, resolved_by: actor.id },
+        remaining_blockers: left,
+      },
+    }, now);
+  }
   return { code: t.code, status: next };
 }
 
@@ -932,7 +972,7 @@ export async function addLeadershipFeedback(db: D1Database, p: {
   const allowed = new Set(Object.values(getHubConfig().leadershipAuthors));
   if (!p.author || !allowed.has(p.author)) throw new AppError("FORBIDDEN", "only a configured leadership author can add feedback");
   if (!TASK_RE.test(p.task)) throw new AppError("BAD_REQUEST", "mã task không hợp lệ");
-  await getTaskRow(db, p.task);
+  const t = await getTaskRow(db, p.task);
   const note = clipNote(p.note);
   if (!note) throw new AppError("BAD_REQUEST", "note trống");
   const snap = await reviewSnapshot(db, p.task, []);
@@ -943,6 +983,13 @@ export async function addLeadershipFeedback(db: D1Database, p: {
     db.prepare(`INSERT INTO alerts (task_code, rule, fired_at) VALUES (?, 'LEADERSHIP_FEEDBACK', ?)
                 ON CONFLICT (task_code, rule) WHERE cleared_at IS NULL DO NOTHING`).bind(p.task, now),
   ]);
+  await enqueueWebhook(db, {
+    member: t.assignee_id,
+    task: { code: t.code, title: t.title, status: t.status },
+    event: "feedback.added",
+    text: `Leadership feedback from ${p.author} on ${t.code} "${t.title}": ${note}`,
+    data: { feedback: { author: p.author, note, at: now, request_version: snap.request_version } },
+  }, now);
   return { code: p.task, author: p.author, at: now, request_version: snap.request_version, output_ref: outputRefJson(snap) };
 }
 

@@ -18,6 +18,7 @@ import { DASHBOARD_JS } from "./dashboard-client";
 import { renderMarkdown } from "./markdown";
 import { createServer } from "./mcp";
 import * as ui from "./ui";
+import { deliverDueWebhooks, setMemberWebhook } from "./webhooks";
 
 export interface Env extends AuthEnv, ConfigEnv {
   DB: D1Database;
@@ -29,6 +30,15 @@ export interface Env extends AuthEnv, ConfigEnv {
   ATTACHMENT_ALLOWED_MIME?: string;
   /** Worker secret. The task page uses it server-side. It is never sent to the browser. */
   CURSOR_API_KEY?: string;
+  /** Optional Worker secret. When set, member webhook secrets are AES-GCM encrypted in D1. */
+  WEBHOOK_SECRET_KEY?: string;
+}
+
+/** Deliver queued webhooks after the response, without delaying it. */
+function kickWebhooks(env: Env, ctx: ExecutionContext) {
+  ctx.waitUntil(deliverDueWebhooks(env.DB, { key: env.WEBHOOK_SECRET_KEY, limit: 10 }).catch((e) => {
+    console.error(JSON.stringify({ msg: "webhook_kick", error: e instanceof Error ? e.name : "error" }));
+  }));
 }
 
 const SEC_HEADERS = {
@@ -75,7 +85,7 @@ function parseDueInput(raw: string, offsetMinutes: number): number | null {
   return utc - offsetMinutes * 60_000;
 }
 
-async function postTaskEdit(req: Request, env: Env, code: string, email: string): Promise<Response> {
+async function postTaskEdit(req: Request, env: Env, code: string, email: string, ctx: ExecutionContext): Promise<Response> {
   if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
   const actor = await memberForAccessEmail(env.DB, email);
   if (!actor) return text(403, "Forbidden");
@@ -92,6 +102,7 @@ async function postTaskEdit(req: Request, env: Env, code: string, email: string)
     if (field === "assignee") {
       if (!raw.trim()) throw new AppError("BAD_REQUEST", "assignee is required");
       await assignTask(env.DB, actor, { task: code, assignee: raw.trim() });
+      kickWebhooks(env, ctx);
     } else if (field === "reviewer") {
       await setReviewer(env.DB, actor, { task: code, reviewer: raw });
     } else if (field === "due_at") {
@@ -141,7 +152,11 @@ async function handleMcp(req: Request, env: Env, ctx: ExecutionContext): Promise
       status: 401, headers: { "content-type": "application/json", "www-authenticate": 'Bearer realm="status-hub"' },
     });
   }
-  const handler = createMcpHandler(() => createServer(env.DB, me, { bucket: env.ATTACHMENTS, env }), {
+  const handler = createMcpHandler(() => createServer(env.DB, me, {
+    bucket: env.ATTACHMENTS, env,
+    webhookKey: env.WEBHOOK_SECRET_KEY,
+    afterWrite: () => kickWebhooks(env, ctx),
+  }), {
     route: "/mcp",
     allowedHostnames: [env.MCP_HOST],
     corsOptions: false,
@@ -149,7 +164,7 @@ async function handleMcp(req: Request, env: Env, ctx: ExecutionContext): Promise
   return handler(req, env, ctx);
 }
 
-async function postFeedback(env: Env, code: string, email: string, req: Request): Promise<Response> {
+async function postFeedback(env: Env, code: string, email: string, req: Request, ctx: ExecutionContext): Promise<Response> {
   if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
   const author = leadershipAuthor(email);
   if (!author) return text(403, "Forbidden");
@@ -161,11 +176,35 @@ async function postFeedback(env: Env, code: string, email: string, req: Request)
   }
   try {
     await addLeadershipFeedback(env.DB, { task: code, author, note });
+    kickWebhooks(env, ctx);
   } catch (e) {
     if (e instanceof AppError) return text(e.httpStatus, e.message);
     throw e;
   }
   return new Response(null, { status: 303, headers: { location: `/t/${encodeURIComponent(code)}`, ...SEC_HEADERS } });
+}
+
+async function postMemberWebhook(req: Request, env: Env, memberId: string, email: string): Promise<Response> {
+  if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
+  const actor = await memberForAccessEmail(env.DB, email);
+  if (!actor) return text(403, "Forbidden");
+  let form: FormData;
+  try { form = await req.formData(); } catch { return text(400, "Bad request"); }
+  const field = (["webhook_url", "webhook_header_name", "webhook_secret"] as const).find((k) => form.has(k));
+  if (!field) return json({ error: "provide webhook_url, webhook_header_name, or webhook_secret" }, 400);
+  const raw = String(form.get(field) ?? "");
+  try {
+    await setMemberWebhook(env.DB, actor, {
+      member: memberId,
+      ...(field === "webhook_url" ? { url: raw } : field === "webhook_header_name" ? { header_name: raw } : { secret: raw }),
+    }, { key: env.WEBHOOK_SECRET_KEY });
+  } catch (e) {
+    if (!(e instanceof AppError)) throw e;
+    if (wantsJson(req)) return json({ error: e.message }, e.httpStatus);
+    return text(e.httpStatus, e.message);
+  }
+  if (wantsJson(req)) return json({ ok: true });
+  return new Response(null, { status: 303, headers: { location: "/members", ...SEC_HEADERS } });
 }
 
 async function postRequestPreview(req: Request, env: Env, _code: string): Promise<Response> {
@@ -434,7 +473,7 @@ async function handleLogout(req: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
+async function handleUi(req: Request, env: Env, url: URL, ctx: ExecutionContext): Promise<Response> {
   const mode = resolveAuthMode(env.AUTH_MODE);
   // magic-link needs an email sender. This Worker does not include one.
   if (mode === "magic-link") {
@@ -460,11 +499,13 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
     const link = path.match(/^\/t\/([A-Z0-9.-]+)\/output-link$/);
     if (link) return postOutputLink(req, env, link[1], email);
     const feedback = path.match(/^\/t\/([A-Z0-9.-]+)\/feedback$/);
-    if (feedback) return postFeedback(env, feedback[1], email, req);
+    if (feedback) return postFeedback(env, feedback[1], email, req, ctx);
+    const webhook = path.match(/^\/members\/([a-z0-9-]{1,32})\/webhook$/);
+    if (webhook) return postMemberWebhook(req, env, webhook[1], email);
     const tokenUpload = path.match(/^\/attachment-uploads\/([A-Za-z0-9_-]{20,})$/);
     if (tokenUpload) return handleUpload(req, env, tokenUpload[1], email);
     const posted = path.match(/^\/t\/([A-Z0-9.-]+)$/);
-    if (posted) return postTaskEdit(req, env, posted[1], email);
+    if (posted) return postTaskEdit(req, env, posted[1], email, ctx);
     const featurePost = path.match(/^\/f\/([A-Z]{2,5}-[A-Z]{2,6}-\d{3,})$/);
     if (featurePost) return postFeaturePriority(req, env, featurePost[1], email);
     return text(405, "Method not allowed");
@@ -517,7 +558,7 @@ export default {
       if (upload && req.method === "POST") return handleUpload(req, env, upload[1]);
       return text(404, "Not found");
     }
-    if (url.hostname === env.UI_HOST) return handleUi(req, env, url);
+    if (url.hostname === env.UI_HOST) return handleUi(req, env, url, ctx);
     // Any other hostname (workers.dev, previews, raw IP): deny.
     return text(403, "Forbidden");
   },
@@ -525,5 +566,9 @@ export default {
   async scheduled(_controller, env, ctx): Promise<void> {
     useHubConfig(configFromEnv(env));
     ctx.waitUntil(runChecks(env.DB).then((r) => console.log(JSON.stringify({ msg: "cron", ...r }))));
+    // Retries for webhooks that failed or were never sent (max 5 attempts, then a WEBHOOK_FAILED alert).
+    ctx.waitUntil(deliverDueWebhooks(env.DB, { key: env.WEBHOOK_SECRET_KEY }).then((r) => {
+      if (r.results.length) console.log(JSON.stringify({ msg: "webhook_cron", delivered: r.delivered, failed: r.failed }));
+    }));
   },
 } satisfies ExportedHandler<Env>;

@@ -64,6 +64,9 @@
     // When set, a https://cursor.com/agents/bc-… link is loaded with
     // GET https://api.cursor.com/v0/agents/{id}. The key never reaches the browser.
     // When unset, the page shows the status stored by set_agent.
+    // WEBHOOK_SECRET_KEY: optional secret that encrypts member webhook secrets in D1 (AES-GCM).
+    // Set with `wrangler secret put WEBHOOK_SECRET_KEY`. Do not put the key in this file.
+    // Member webhooks are set by an admin (MCP set_member_webhook or the Members page).
     // Optional alert overrides. Leave a variable unset to use the settings table.
     // Defaults (migration 0001, overridable in SQL): not_started_minutes=15, stale_hours=4,
     // stale_work_start_hour=8, stale_work_end_hour=22, blocked_hours=2, tz_offset_minutes=0 (UTC).

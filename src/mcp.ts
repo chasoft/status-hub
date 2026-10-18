@@ -7,10 +7,15 @@ import {
 import { getHubConfig } from "./config";
 import * as core from "./core";
 import type { Member } from "./core";
+import { listWebhooks, setMemberWebhook, testMemberWebhook } from "./webhooks";
 
 export interface McpFiles {
   bucket?: R2Bucket;
   env?: AttachmentEnv;
+  /** WEBHOOK_SECRET_KEY, used to encrypt member webhook secrets. */
+  webhookKey?: string;
+  /** Called after a write that may have queued a webhook (delivery runs in ctx.waitUntil). */
+  afterWrite?: () => void;
 }
 
 type Handler = (args: any) => Promise<unknown>;
@@ -44,6 +49,12 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
   const bucket = files?.bucket;
   const tool = (name: string, description: string, inputSchema: Record<string, z.ZodType>, fn: Handler) =>
     server.registerTool(name, { description, inputSchema }, wrap(fn));
+  /** Run a write, then let queued webhooks go out. */
+  const kick = (fn: Handler): Handler => async (a) => {
+    const out = await fn(a);
+    files?.afterWrite?.();
+    return out;
+  };
 
   tool("whoami", "Bot id, role, open task count, and open alert count.", {}, () => core.whoami(db, me));
   tool("list_my_tasks",
@@ -58,7 +69,7 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
     { task: taskCode, status, note: z.string().max(core.NOTE_MAX).optional(), links: z.array(z.string()).max(10).optional(),
       reviewer: z.string().max(32).optional().describe("Active member id. Required when moving to review if the task has no reviewer yet."),
       approved_by: approver.optional() },
-    (a) => core.reportStatus(db, me, a));
+    kick((a) => core.reportStatus(db, me, a)));
   tool("set_agent",
     "Attach or clear the cloud agent working on a task. Does not change the task status. agent_url accepts https only (null or an empty string clears it). A Cursor agent uses https://cursor.com/agents/bc-…. status is the status the bot reports (null clears it). Call this when the agent is opened and again when the link is removed. Only the assignee, the reviewer, or a pm/po/lead/admin.",
     { task: taskCode,
@@ -71,8 +82,8 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
   tool("set_blocker", "Open a blocker and move the task to blocked. waiting_on is an existing member id or a configured owner/approver id. kind: need_info, dependency, access, bug. need_approval is rejected; waiting for approval is the pending_approval status. A pending_approval task cannot take a blocker.",
     { task: taskCode, kind: z.string().max(32).describe("need_info | dependency | access | bug"), waiting_on: z.string().max(32), detail: z.string().max(core.NOTE_MAX) },
     (a) => core.setBlocker(db, me, a));
-  tool("resolve_blocker", "Close a blocker. The task returns to in_progress when none remain.", { id: z.number().int(), note: z.string().max(core.NOTE_MAX).optional() },
-    (a) => core.resolveBlocker(db, me, a));
+  tool("resolve_blocker", "Close a blocker. A blocked task returns to in_progress when none remain. A task that is not blocked (for example cancelled or done) keeps its status.", { id: z.number().int(), note: z.string().max(core.NOTE_MAX).optional() },
+    kick((a) => core.resolveBlocker(db, me, a)));
   tool("get_task", "Task detail (including reviewer_id, agent_url, agent_status, agent_updated_at), the latest request version, an attachment summary (requirement and output, plus output links), the 10 latest updates, leadership feedback (feedback[].unread, request_version, output_ref), and time in each status (periods, epoch ms UTC). When the assignee calls this, feedback is marked read and the LEADERSHIP_FEEDBACK alert is cleared. attachments_configured is false when the R2 binding is absent.", { code: taskCode },
     async (a) => ({ ...await core.getTask(db, a.code, Date.now(), me), attachments_configured: !!bucket }));
   tool("set_request",
@@ -128,14 +139,14 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
       requested_at: z.number().int().optional().describe("epoch ms UTC"),
       request_link: z.string().max(500).optional().describe("http(s) URL of the request"),
       request: z.string().max(core.REQUEST_MAX).optional().describe("Markdown request document. Stored as version 1. Bots should send who, what, why, acceptance criteria, and impacted areas.") },
-    (a) => core.createTask(db, me, a));
+    kick((a) => core.createTask(db, me, a)));
   tool("update_task", "(assignee or pm/po/lead/admin) Edit pr_url and links without changing status. Only http/https URLs.",
     { task: taskCode,
       pr_url: z.string().max(500).optional().describe("http or https URL; empty string clears it"),
       links: z.array(z.string().max(500)).max(10).optional() },
     (a) => core.updateTask(db, me, a));
   tool("assign_task", "(pm/po/lead/admin) Change the assignee and keep the status. Reassigning an assigned task resets the NOT_STARTED clock.", { task: taskCode, assignee: z.string().max(32) },
-    (a) => core.assignTask(db, me, a));
+    kick((a) => core.assignTask(db, me, a)));
   tool("create_project", "(admin) Register a project code matching ^[A-Z]{2,5}$ (also creates a CORE module).",
     { code: z.string().regex(core.PROJECT_RE), name: z.string().min(2).max(100), owner: z.string().max(32).optional(), repo_url: z.string().url().optional() },
     (a) => core.createProject(db, me, a));
@@ -145,5 +156,23 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
   tool("set_token_hash", "(admin) Store the SHA-256 of a new token for a member, or null to revoke it. Never send the raw token.",
     { member: z.string().max(32), sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable() },
     (a) => core.setTokenHash(db, me, a));
+  tool("set_reviewer", "(admin) Set or change a task's reviewer without changing its status, for example to move a self-reviewed task to another member. reviewer: an active member id; an empty string clears it.",
+    { task: taskCode, reviewer: z.string().max(32) },
+    (a) => {
+      core.requireAdmin(me, "set_reviewer");
+      return core.setReviewer(db, me, a);
+    });
+  tool("set_member_webhook",
+    "(admin) Set or clear a member's outbound webhook. Status Hub POSTs JSON to it when the member's task gets leadership feedback, is assigned to them, or has a blocker resolved. url: https only; null or an empty string clears the URL, header, and secret. header_name and secret: the header that carries a sender key (for example X-Api-Key); omitted keeps the stored value, an empty string clears it. The secret is write-only: no tool or page returns it.",
+    { member: z.string().max(32),
+      url: z.string().max(500).nullable().optional(),
+      header_name: z.string().max(64).nullable().optional(),
+      secret: z.string().max(1024).nullable().optional() },
+    (a) => setMemberWebhook(db, me, a, { key: files?.webhookKey }));
+  tool("list_webhooks", "(admin) Members with a webhook: url, header_name, secret set or none, pending and failed deliveries, last delivery time, last error. Never returns secrets.", {},
+    () => listWebhooks(db, me));
+  tool("test_member_webhook", "(admin) Send a webhook.test event to a member's webhook now and return the HTTP result. Not retried.",
+    { member: z.string().max(32) },
+    (a) => testMemberWebhook(db, me, a, { key: files?.webhookKey }));
   return server;
 }
