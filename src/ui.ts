@@ -155,9 +155,10 @@ details.lane:not([open]) .chev{transform:rotate(-90deg)}
 .cancelled-list{max-height:180px;overflow:auto}
 table{border-collapse:separate;border-spacing:0;width:100%;background:var(--card)}
 td,th{border-bottom:1px solid var(--bd);padding:6px 8px;text-align:left;vertical-align:top}
-.sheet-scroll th,.tab-scroll th,.page-scroll th{position:sticky;top:0;background:var(--card);z-index:1}
+.sheet-scroll thead th,.tab-scroll thead th,.page-scroll thead th{position:sticky;top:0;background:var(--card);z-index:1}
 .page-scroll h2,.page-scroll h3{position:sticky;top:0;background:var(--bg);z-index:2;margin:0;padding:8px 0}
-.page-scroll th{top:2.4rem}
+.page-scroll thead th{top:2.4rem}
+.fields th{width:9.5rem;color:var(--mut);font-weight:650;white-space:nowrap}
 .lead{background:#fff6ea;box-shadow:inset 3px 0 var(--warn)}
 .flag{color:var(--danger);font-weight:700}
 .muted,.empty{color:var(--mut)}
@@ -187,6 +188,9 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .task-panel{display:none;flex:1;min-height:0;flex-direction:column}
 .task-panel.is-on{display:flex}
 .tab-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 14px}
+.feedback-pane{flex:0 0 auto;display:flex;flex-direction:column;min-height:10.5rem;max-height:40%;border-top:1px solid var(--bd);background:var(--card)}
+.feedback-pane .sheet-h{margin:8px 14px 4px}
+.feedback-pane .sheet-scroll{flex:1;min-height:6.5rem;overflow:auto;padding:0 14px 8px}
 .feedback-dock{flex:none;display:flex;gap:8px;align-items:flex-end;padding:8px 12px;border-top:1px solid var(--bd);background:var(--card);position:sticky;bottom:0;z-index:2}
 .feedback-dock textarea{flex:1;width:auto;max-width:none;min-height:2.25rem;max-height:8rem;resize:vertical;line-height:1.4}
 .feedback-dock textarea:focus{min-height:4.75rem}
@@ -222,7 +226,7 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
   .body{display:block}
   .sidebar{width:auto;max-height:none;border-right:0;border-bottom:1px solid var(--bd);overflow:auto}
   .nav-links{flex-direction:row;flex-wrap:wrap}
-  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell,.task-main,.page-fill,.task,.task-panel,.tab-scroll,.sheet,.sheet-scroll{height:auto;max-height:none;overflow:visible;flex:none}
+  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell,.task-main,.page-fill,.task,.task-panel,.tab-scroll,.sheet,.sheet-scroll,.feedback-pane{height:auto;max-height:none;overflow:visible;flex:none}
   .cell-label{display:block}
   .colheads{display:none}
   .summary,details.lane>summary{display:flex;flex-wrap:wrap}
@@ -711,25 +715,25 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
   const assigneeValue = row.assignee_id ?? "";
   const active = taskTabOf(tab);
   const overviewBadge = unread ? ` <span class="count is-on">${unread}</span>` : "";
+  const fieldRow = (label: string, value: string) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
   const overview = `<div class="tab-scroll"><h2>${esc(code)}</h2>
-<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
-<tr><th>Requested by</th><td>${reqCell(full.requested_by)}</td></tr>
-<tr><th>Requested at</th><td>${full.requested_at ? fmt(Number(full.requested_at), tz) : "Not set"}</td></tr>
-<tr><th>Request link</th><td>${reqLink}</td></tr>
-</tbody></table>
-${card(row, now, tz)}
-<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
-<tr><th>Feature</th><td>${esc(row.feature_code)} · ${esc(row.feature_title)}</td></tr>
-<tr><th>Assignee</th><td>${inlineEdit({ action, name: "assignee", label: "Assignee", kind: "text", value: fieldDraft("assignee", assigneeValue), display: assigneeValue ? esc(assigneeValue) : "", editable: canAssign, error: fieldError("assignee"), draft: fieldDraft("assignee", assigneeValue), options: memberOptions })}</td></tr>
-<tr><th>Reviewer</th><td>${inlineEdit({ action, name: "reviewer", label: "Reviewer", kind: "text", value: fieldDraft("reviewer", reviewerValue), display: reviewerValue ? esc(reviewerValue) : "", editable: canEdit, error: fieldError("reviewer"), draft: fieldDraft("reviewer", reviewerValue), options: [{ value: "", label: "—" }, ...memberOptions] })}</td></tr>
-<tr><th>Assigned at</th><td>${fmt(full.assigned_at as number | null, tz)}</td></tr>
-<tr><th>Started</th><td>${fmt(full.started_at as number | null, tz)}</td></tr>
-<tr><th>Due</th><td>${inlineEdit({ action, name: "due_at", label: "Due", kind: "time", value: fieldDraft("due_at", dueValue), display: fmt(full.due_at as number | null, tz) === "—" ? "" : fmt(full.due_at as number | null, tz), editable: canEdit, error: fieldError("due_at"), draft: fieldDraft("due_at", dueValue), inputType: "datetime-local" })}</td></tr>
-<tr><th>Done at</th><td>${fmt(full.done_at as number | null, tz)}</td></tr>
-<tr><th>PR</th><td>${inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: prValue, display: prValue ? externalAnchor(prValue) : "", editable: canEdit, error: fieldError("pr_url"), draft: fieldDraft("pr_url", prValue), inputType: "url" })}</td></tr>
-<tr><th>Links</th><td>${inlineEdit({ action, name: "links", label: "Links", kind: "links", value: linkValue, display: linkDisplay, editable: canEdit, error: fieldError("links"), draft: fieldDraft("links", linkValue) })}</td></tr>
+<table class="fields"><tbody>
+${fieldRow("Title", esc(row.title))}
+${fieldRow("Status", badge(row.status))}
+${fieldRow("Feature", `${esc(row.feature_code)} · ${esc(row.feature_title)}`)}
+${fieldRow("Requested by", reqCell(full.requested_by))}
+${fieldRow("Requested at", full.requested_at ? fmt(Number(full.requested_at), tz) : "Not set")}
+${fieldRow("Request link", reqLink)}
+${fieldRow("Assignee", inlineEdit({ action, name: "assignee", label: "Assignee", kind: "text", value: fieldDraft("assignee", assigneeValue), display: assigneeValue ? esc(assigneeValue) : "", editable: canAssign, error: fieldError("assignee"), draft: fieldDraft("assignee", assigneeValue), options: memberOptions }))}
+${fieldRow("Reviewer", inlineEdit({ action, name: "reviewer", label: "Reviewer", kind: "text", value: fieldDraft("reviewer", reviewerValue), display: reviewerValue ? esc(reviewerValue) : "", editable: canEdit, error: fieldError("reviewer"), draft: fieldDraft("reviewer", reviewerValue), options: [{ value: "", label: "—" }, ...memberOptions] }))}
+${fieldRow("Assigned at", fmt(full.assigned_at as number | null, tz))}
+${fieldRow("Started", fmt(full.started_at as number | null, tz))}
+${fieldRow("Due", inlineEdit({ action, name: "due_at", label: "Due", kind: "time", value: fieldDraft("due_at", dueValue), display: fmt(full.due_at as number | null, tz) === "—" ? "" : fmt(full.due_at as number | null, tz), editable: canEdit, error: fieldError("due_at"), draft: fieldDraft("due_at", dueValue), inputType: "datetime-local" }))}
+${fieldRow("Done at", fmt(full.done_at as number | null, tz))}
+${fieldRow("PR", inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: prValue, display: prValue ? externalAnchor(prValue) : "", editable: canEdit, error: fieldError("pr_url"), draft: fieldDraft("pr_url", prValue), inputType: "url" }))}
+${fieldRow("Links", inlineEdit({ action, name: "links", label: "Links", kind: "links", value: linkValue, display: linkDisplay, editable: canEdit, error: fieldError("links"), draft: fieldDraft("links", linkValue) }))}
 </tbody></table></div>
-${sheet("h3", "Feedback", feedbackTable)}
+<section class="feedback-pane"><h3 class="sheet-h">Feedback</h3><div class="sheet-scroll">${feedbackTable}</div></section>
 ${feedbackForm}`;
   const historyTable = `<table><thead><tr><th>When</th><th>Who</th><th>Status</th><th>Note</th></tr></thead><tbody>${updates.map((x) => `<tr><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}</tbody></table>`;
   const blockerTable = `<table><thead><tr><th>#</th><th>Kind</th><th>Waiting on</th><th>Detail</th><th>Opened</th><th>Closed</th></tr></thead><tbody>${(b.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.kind)}</td><td>${esc(x.waiting_on)}</td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td><td>${fmt(x.resolved_at as number | null, tz)}</td></tr>`).join("") || `<tr><td colspan="6">—</td></tr>`}</tbody></table>`;

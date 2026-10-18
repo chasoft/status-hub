@@ -116,6 +116,13 @@ describe("dashboard shell", () => {
     expect(html).toContain('data-tab="blockers"');
     expect(html).not.toContain('data-tab="feedback"');
     expect(html).toContain('class="feedback-dock"');
+    expect(html).toContain('class="feedback-pane"');
+    expect(html).toContain("fragment task");
+    const overview = html.slice(html.indexOf('id="panel-overview"'), html.indexOf('id="panel-timeline"'));
+    expect(overview).not.toContain('class="card');
+    expect(overview).not.toContain("<th>Field</th>");
+    expect(overview).not.toContain("<th>Value</th>");
+    expect(overview.match(/<table/g)).toHaveLength(2);
     expect(html).toContain('rows="1"');
     expect(html).toContain('data-inline-edit');
     expect(html).toContain('name="pr_url"');
