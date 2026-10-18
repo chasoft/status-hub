@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { configFromEnv } from "../src/config";
 import * as core from "../src/core";
 import { accessJwt, fullRequest, member, UI, worker } from "./helpers";
 
@@ -15,6 +16,21 @@ async function page(path: string, email = "owner@example.com"): Promise<{ status
   };
 }
 
+describe("app version", () => {
+  it("shows dev in the sidebar and busts the script cache with it", async () => {
+    const res = await page("/");
+    expect(res.html).toContain('<p class="app-version" title="Status Hub version">vdev</p>');
+    expect(res.html).toContain('src="/assets/dashboard.js?v=dev"');
+  });
+
+  it("reads APP_VERSION and rejects unsafe values", () => {
+    expect(configFromEnv({ APP_VERSION: "1.0.42" }).appVersion).toBe("1.0.42");
+    expect(configFromEnv({ APP_VERSION: " v1.0.42 " }).appVersion).toBe("1.0.42");
+    expect(configFromEnv({}).appVersion).toBe("dev");
+    expect(configFromEnv({ APP_VERSION: "1.0\"><script>" }).appVersion).toBe("dev");
+  });
+});
+
 describe("dashboard shell", () => {
   it("renders a viewport board with project navigation and no full-page refresh", async () => {
     const res = await page("/?project=SCOS");
@@ -22,7 +38,7 @@ describe("dashboard shell", () => {
     expect(res.csp).toContain("script-src 'self'");
     expect(res.csp).toContain("connect-src 'self'");
     expect(res.html).toContain("100dvh");
-    expect(res.html).toContain('src="/assets/dashboard.js"');
+    expect(res.html).toContain('src="/assets/dashboard.js?v=dev"');
     expect(res.html).not.toContain('http-equiv="refresh"');
     expect(res.html).not.toMatch(/\son[a-z]+=/i);
     expect(res.html).toContain('id="drawer"');

@@ -154,6 +154,8 @@ button:hover,summary:hover{border-color:var(--accent)}
 kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:var(--radius);padding:0 4px;opacity:.8}
 .body{flex:1;display:flex;min-height:0;min-width:0}
 .sidebar{width:232px;flex:none;overflow:auto;background:var(--sidebar);border-right:1px solid var(--bd);padding:10px 8px 16px;min-height:0}
+.sidebar{display:flex;flex-direction:column}
+.app-version{margin:auto 0 0;padding:12px 8px 0;font-size:11px;color:var(--mut);font-variant-numeric:tabular-nums}
 .nav-links,.proj-nav{display:flex;flex-direction:column;gap:2px}
 .nav-label{margin:14px 8px 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
 .nav-link,.proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius);color:var(--tx);text-decoration:none}
@@ -653,7 +655,7 @@ function newTaskForm(requesters: string[]): string {
 }
 
 function shell(title: string, main: string, email: string, chrome: Chrome, page: PageId, board: boolean): string {
-  const org = getHubConfig().orgName;
+  const { orgName: org, appVersion: version } = getHubConfig();
   const f = chrome.filters;
   const alertTotal = chrome.alerts.reduce((sum, a) => sum + a.n, 0);
   const openTotal = chrome.projects.reduce((sum, p) => sum + p.open_n, 0);
@@ -707,6 +709,7 @@ ${nav("alerts", "/alerts", "Alerts")}
 ${nav("members", "/members", "Members")}
 </div>
 ${projects}
+<p class="app-version" title="Status Hub version">v${esc(version)}</p>
 </nav>
 <main id="main" class="${board ? "board-main" : page === "task" ? "task-main" : page === "done" || page === "alerts" || page === "members" ? "page-fill" : "page-scroll"}">${main}</main>
 </div>
@@ -719,7 +722,7 @@ ${projects}
 <div id="user-menu" popover><p class="user-email">${esc(email)}</p><p class="muted">${esc(tzLabel(chrome.tz))}</p>${logout}</div>
 ${dialogs}
 <noscript><style>.ie-form[hidden]{display:flex !important}.ie-view{display:none !important}</style></noscript>
-<script src="/assets/dashboard.js" defer></script>
+<script src="/assets/dashboard.js?v=${encodeURIComponent(version)}" defer></script>
 </body></html>`;
 }
 
@@ -814,7 +817,7 @@ function doc(title: string, body: string): string {
 }
 
 export function renderLogin(error?: string, next?: string): string {
-  const org = getHubConfig().orgName;
+  const { orgName: org, appVersion: version } = getHubConfig();
   const nextField = next ? `<input type="hidden" name="next" value="${esc(next)}">` : "";
   const err = error ? `<p class="flag">${esc(error)}</p>` : "";
   return doc("Log in", `<body class="login-body"><main class="login-card"><p class="muted">${esc(org)}</p><h1>Log in</h1>${err}

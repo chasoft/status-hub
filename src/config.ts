@@ -24,6 +24,8 @@ export interface HubConfig {
   tzOffsetMinutes?: number;
   /** UI auth. Only "token" changes the pages; every other mode stays on the Access chrome. */
   authMode: "access" | "token";
+  /** Release label shown in the sidebar, for example 1.0.123. "dev" when unset. */
+  appVersion: string;
 }
 
 export interface ConfigEnv {
@@ -40,6 +42,7 @@ export interface ConfigEnv {
   BLOCKED_HOURS?: string;
   TZ_OFFSET_MINUTES?: string;
   AUTH_MODE?: string;
+  APP_VERSION?: string;
 }
 
 const DEFAULTS: HubConfig = {
@@ -50,6 +53,7 @@ const DEFAULTS: HubConfig = {
   emailMembers: {},
   leadershipAuthors: {},
   authMode: "access",
+  appVersion: "dev",
 };
 
 let active: HubConfig = DEFAULTS;
@@ -92,6 +96,12 @@ function optionalNumber(value: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Keep a short, URL-safe label. Anything else falls back to "dev". */
+function cleanVersion(value: string | undefined): string {
+  const v = value?.trim().replace(/^v/i, "") ?? "";
+  return /^[0-9A-Za-z][0-9A-Za-z.+-]{0,39}$/.test(v) ? v : DEFAULTS.appVersion;
+}
+
 export function configFromEnv(env: ConfigEnv): HubConfig {
   const mcpServerName = env.MCP_SERVER_NAME?.trim() || DEFAULTS.mcpServerName;
   const orgName = env.ORG_NAME?.trim() || DEFAULTS.orgName;
@@ -109,6 +119,7 @@ export function configFromEnv(env: ConfigEnv): HubConfig {
     blockedHours: optionalNumber(env.BLOCKED_HOURS),
     tzOffsetMinutes: optionalNumber(env.TZ_OFFSET_MINUTES),
     authMode: env.AUTH_MODE?.trim().toLowerCase() === "token" ? "token" : "access",
+    appVersion: cleanVersion(env.APP_VERSION),
   };
 }
 

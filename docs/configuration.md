@@ -148,6 +148,7 @@ pnpm run deploy:staging
 | `STALE_WORK_END_HOUR` | unset | `settings.stale_work_end_hour`, seeded as `22` | Optional alert override. Hour is exclusive. |
 | `BLOCKED_HOURS` | unset | `settings.blocked_hours`, seeded as `2` | Optional alert override. |
 | `TZ_OFFSET_MINUTES` | unset | `settings.tz_offset_minutes`, seeded as `0` | Optional timezone override, in minutes east of UTC. `0` is UTC. A set value of `0` still overrides the table. |
+| `APP_VERSION` | unset | `dev` | Release label shown at the bottom of the sidebar as `v<value>`, and appended to `/assets/dashboard.js?v=` so a new release does not run an old cached script. Letters, digits, `.`, `+` and `-` only, up to 40 characters; anything else shows `dev`. Set it at deploy time, for example `pnpm run deploy -- --var APP_VERSION:1.0.$(git rev-list --count HEAD)` (needs full git history). |
 | `ATTACHMENT_MAX_BYTES` | unset | `10485760` (10 MiB). A blank or non-numeric value uses that default. | Max bytes for one attachment upload. Values above `26214400` (25 MiB) are capped. |
 | `ATTACHMENT_ALLOWED_MIME` | unset | png, jpeg, gif, webp, avif, svg, pdf, plain text, markdown, csv, tsv, yaml, xml, html, css, javascript, python, shell, sql, json, mp4, webm, quicktime, mpeg audio, wav, ogg, mp4 audio | Comma-separated MIME allowlist. A blank value uses the default list. Raster images must match their magic bytes. SVG must start with `<svg` or an XML declaration that contains `<svg`. HTML is stored but previewed as source text. |
 
