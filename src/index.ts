@@ -5,7 +5,8 @@ import {
   type AuthEnv,
 } from "./auth";
 import { configFromEnv, useHubConfig, type ConfigEnv } from "./config";
-import { addLeadershipFeedback, AppError, createTaskFromUi, runChecks, updateTask, type Status } from "./core";
+import { addLeadershipFeedback, AppError, assignTask, createTaskFromUi, loadSettings, runChecks, setDueAt, setFeaturePriority, setReviewer, updateTask, type Status } from "./core";
+import { DASHBOARD_JS } from "./dashboard-client";
 import { createServer } from "./mcp";
 import * as ui from "./ui";
 
@@ -16,13 +17,17 @@ export interface Env extends AuthEnv, ConfigEnv {
 }
 
 const SEC_HEADERS = {
-  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
 };
 
 const text = (status: number, body: string) => new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...SEC_HEADERS } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...SEC_HEADERS },
+});
 
 /**
  * CSRF guard for UI form POSTs. Browsers send Sec-Fetch-Site on every request and
@@ -40,24 +45,76 @@ function isSameOriginPost(req: Request, env: Env): boolean {
   try { return new URL(origin).host === env.UI_HOST; } catch { return false; }
 }
 
-async function postTaskPr(req: Request, env: Env, code: string, email: string): Promise<Response> {
+function wantsJson(req: Request): boolean {
+  return (req.headers.get("accept") || "").includes("application/json");
+}
+
+/** datetime-local is the wall clock in the deployment offset. Empty stays empty. */
+function parseDueInput(raw: string, offsetMinutes: number): number | null {
+  const value = raw.trim();
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) throw new AppError("BAD_REQUEST", "due date must be a date and time");
+  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+  if (!Number.isFinite(utc)) throw new AppError("BAD_REQUEST", "due date must be a date and time");
+  return utc - offsetMinutes * 60_000;
+}
+
+async function postTaskEdit(req: Request, env: Env, code: string, email: string): Promise<Response> {
   if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
   const actor = await memberForAccessEmail(env.DB, email);
   if (!actor) return text(403, "Forbidden");
-  let raw = "";
+  let form: FormData;
   try {
-    raw = String((await req.formData()).get("pr_url") ?? "");
-    await updateTask(env.DB, actor, { task: code, pr_url: raw });
-  } catch (e) {
-    if (e instanceof AppError && e.code === "NOT_FOUND") return text(404, e.message);
-    if (e instanceof AppError && e.code === "FORBIDDEN") return text(403, e.message);
-    if (e instanceof AppError) {
-      const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, pr_url: raw });
-      return page ? html(page, 400) : text(404, "Not found");
-    }
-    throw e;
+    form = await req.formData();
+  } catch {
+    return text(400, "Bad request");
   }
+  const jsonMode = wantsJson(req);
+  const field = form.has("assignee") ? "assignee" : form.has("reviewer") ? "reviewer" : form.has("due_at") ? "due_at" : form.has("links") ? "links" : "pr_url";
+  const raw = String(form.get(field) ?? "");
+  try {
+    if (field === "assignee") {
+      if (!raw.trim()) throw new AppError("BAD_REQUEST", "assignee is required");
+      await assignTask(env.DB, actor, { task: code, assignee: raw.trim() });
+    } else if (field === "reviewer") {
+      await setReviewer(env.DB, actor, { task: code, reviewer: raw });
+    } else if (field === "due_at") {
+      const tz = (await loadSettings(env.DB)).tz_offset_minutes;
+      await setDueAt(env.DB, actor, { task: code, due_at: parseDueInput(raw, tz) });
+    } else if (field === "links") {
+      const links = raw.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+      await updateTask(env.DB, actor, { task: code, links });
+    } else {
+      await updateTask(env.DB, actor, { task: code, pr_url: raw });
+    }
+  } catch (e) {
+    if (!(e instanceof AppError)) throw e;
+    if (jsonMode) return json({ error: e.message }, e.httpStatus);
+    if (e.code === "NOT_FOUND") return text(404, e.message);
+    if (e.code === "FORBIDDEN") return text(403, e.message);
+    const page = await ui.renderTask(env.DB, code, email, Date.now(), { error: e.message, field, value: raw, pr_url: field === "pr_url" ? raw : undefined });
+    return page ? html(page, e.httpStatus) : text(404, "Not found");
+  }
+  if (jsonMode) return json({ ok: true });
   return new Response(null, { status: 303, headers: { location: `/t/${encodeURIComponent(code)}`, ...SEC_HEADERS } });
+}
+
+async function postFeaturePriority(req: Request, env: Env, code: string, email: string): Promise<Response> {
+  if (!isSameOriginPost(req, env)) return text(403, "Forbidden");
+  const actor = await memberForAccessEmail(env.DB, email);
+  if (!actor) return text(403, "Forbidden");
+  let priority = "";
+  try {
+    priority = String((await req.formData()).get("priority") ?? "");
+    const saved = await setFeaturePriority(env.DB, actor, { feature: code, priority });
+    if (wantsJson(req)) return json({ ok: true });
+    return new Response(null, { status: 303, headers: { location: `/p/${encodeURIComponent(saved.project_code)}`, ...SEC_HEADERS } });
+  } catch (e) {
+    if (!(e instanceof AppError)) throw e;
+    if (wantsJson(req)) return json({ error: e.message }, e.httpStatus);
+    return text(e.httpStatus, e.message);
+  }
 }
 
 async function handleMcp(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -201,10 +258,22 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
     const feedback = path.match(/^\/t\/([A-Z0-9.-]+)\/feedback$/);
     if (feedback) return postFeedback(env, feedback[1], email, req);
     const posted = path.match(/^\/t\/([A-Z0-9.-]+)$/);
-    if (!posted) return text(405, "Method not allowed");
-    return postTaskPr(req, env, posted[1], email);
+    if (posted) return postTaskEdit(req, env, posted[1], email);
+    const featurePost = path.match(/^\/f\/([A-Z]{2,5}-[A-Z]{2,6}-\d{3,})$/);
+    if (featurePost) return postFeaturePriority(req, env, featurePost[1], email);
+    return text(405, "Method not allowed");
   }
   if (req.method !== "GET") return text(405, "Method not allowed");
+  if (path === "/assets/dashboard.js") {
+    return new Response(DASHBOARD_JS, {
+      headers: {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }
+  if (path === "/api/board") return json(await ui.boardJson(env.DB, url));
   let m: RegExpMatchArray | null;
   let out: string | null = null;
   if (path === "/new") out = await ui.renderNewTask(env.DB, email);
@@ -212,7 +281,14 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
   else if (path === "/done") out = await ui.renderDone(env.DB, url, email);
   else if (path === "/alerts") out = await ui.renderAlerts(env.DB, email);
   else if (path === "/members") out = await ui.renderMembers(env.DB, email);
-  else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)$/))) out = await ui.renderTask(env.DB, m[1], email);
+  else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)$/))) {
+    const tab = url.searchParams.get("tab");
+    if (url.searchParams.has("fragment")) {
+      const frag = await ui.renderTaskFragment(env.DB, m[1], email, Date.now(), undefined, tab);
+      return frag ? html(frag) : text(404, "Not found");
+    }
+    out = await ui.renderTask(env.DB, m[1], email, Date.now(), undefined, tab);
+  }
   else if ((m = path.match(/^\/p\/([A-Z]{2,5})$/))) out = await ui.renderProject(env.DB, m[1], email);
   else if ((m = path.match(/^\/m\/([a-z0-9-]{1,32})$/))) out = await ui.renderMember(env.DB, m[1], email);
   return out ? html(out) : text(404, "Not found");

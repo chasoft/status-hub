@@ -35,6 +35,7 @@ D1 applies each file in [migrations/](migrations) once and records the filename.
 | `src/auth.ts` | Bearer tokens and the Access JWT check. |
 | `src/config.ts` | Env parsing. |
 | `src/ui.ts` | Server-rendered HTML. |
+| `src/dashboard-client.ts` | Dashboard script served at `/assets/dashboard.js`. |
 | `test/` | Vitest coverage for the rules above. |
 
 Identity stays on the bot token or the verified UI email (`AUTH_MODE=access` or `AUTH_MODE=token`). Tool arguments and form fields do not choose the caller. Follow that in new tools.

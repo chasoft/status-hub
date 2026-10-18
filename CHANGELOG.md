@@ -6,6 +6,7 @@ All notable changes to Status Hub are documented in this file. The project follo
 
 ### Added
 
+- Dashboard UI: viewport shell, project navigator, collapsible swimlanes, task drawer, create-task dialog, and filter popovers. `GET /api/board` polls the board in place. External links open in a new tab. Task detail uses Overview, Timeline, History, and Blockers (`?tab=`). Feedback stays on Overview with the composer pinned to that tab. Editable values use one inline editor. Buttons, inputs, and badges use a 5px radius.
 - `AUTH_MODE=token`: a login page, SHA-256 login tokens in D1 (`ui_login_tokens`), and a signed `HttpOnly` `Secure` `SameSite=Lax` session cookie with logout. `AUTH_MODE=access` is unchanged. `magic-link` is not available.
 - `pnpm run ui-login` (`scripts/gen-ui-login.mjs`) mints a UI login token locally and prints the SQL for the hash.
 - Migration `0008_ui_login.sql`.

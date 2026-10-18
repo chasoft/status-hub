@@ -65,7 +65,8 @@ Format: `shk_<memberId>_<secret>`.
 
 HTML responses send:
 
-- `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- The dashboard script is `/assets/dashboard.js` on the UI host. Pages do not use inline event handlers. `connect-src 'self'` allows the board poll.
 - `x-content-type-options: nosniff`
 - `referrer-policy: no-referrer`
 - `cache-control: no-store`
