@@ -160,6 +160,44 @@ describe("Kanban feature groups", () => {
   });
 });
 
+describe("Done column groups and sidebar count tooltips", () => {
+  it("collapses feature groups in Done by default and keeps other columns open", async () => {
+    const lily = await project("DNG");
+    const feat = await core.createFeature(env.DB, lily, { module: "DNG-CORE", title: "Done feature" });
+    const d1 = await core.createTask(env.DB, lily, { feature: feat.code, title: "Done one", assignee: "peter" });
+    const d2 = await core.createTask(env.DB, lily, { feature: feat.code, title: "Done two", assignee: "peter" });
+    const now = Date.now();
+    await env.DB.prepare("UPDATE tasks SET status = 'done', done_at = ?, last_update_at = ? WHERE code IN (?, ?)").bind(now, now, d1.code, d2.code).run();
+    await core.createTask(env.DB, lily, { feature: feat.code, title: "Open one", assignee: "peter" });
+    await core.createTask(env.DB, lily, { feature: feat.code, title: "Open two", assignee: "peter" });
+
+    const body = await html("/?project=DNG");
+    const done = body.match(new RegExp(`<details class="group" data-group="board:done:${feat.code}"[^>]*>`))?.[0] ?? "";
+    expect(done).not.toBe("");
+    expect(done).not.toMatch(/\sopen[\s>]/);
+    const pending = body.match(new RegExp(`<details class="group" data-group="board:pending_approval:${feat.code}"[^>]*>`))?.[0] ?? "";
+    expect(pending).toContain(" open ");
+    expect(DASHBOARD_JS).toContain("board:done:");
+    expect(DASHBOARD_JS).toContain("groupDefaultCollapsed");
+    expect(() => new Function(DASHBOARD_JS)).not.toThrow();
+  });
+
+  it("labels sidebar open-task and alert counts with a tooltip and screen-reader text", async () => {
+    const lily = await project("TIP");
+    const feat = await core.createFeature(env.DB, lily, { module: "TIP-CORE", title: "Tips" });
+    await core.createTask(env.DB, lily, { feature: feat.code, title: "Only task", assignee: "peter" });
+    const body = await html("/?project=TIP");
+    const row = body.match(/<a class="proj[^"]*"[^>]*data-nav-project="TIP"[\s\S]*?<\/a>/)?.[0] ?? "";
+    expect(row).toContain('title="1 open task"');
+    expect(row).toContain('<span class="sr-only" data-label>1 open task</span>');
+    expect(row).toContain('title="0 open alerts"');
+    const all = body.match(/<a class="proj[^"]*"[^>]*data-nav-project="\*"[\s\S]*?<\/a>/)?.[0] ?? "";
+    expect(all).toMatch(/title="\d+ open tasks?"/);
+    expect(all).toMatch(/title="\d+ open alerts?"/);
+    expect(DASHBOARD_JS).toContain("setNavCount");
+  });
+});
+
 describe("table view", () => {
   it("lists one row per task, grouped and tinted, and honors filters and sort", async () => {
     const lily = await project("TBL");
