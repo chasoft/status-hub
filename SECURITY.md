@@ -65,7 +65,8 @@ Format: `shk_<memberId>_<secret>`.
 
 HTML responses send:
 
-- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `img-src` allows same-origin attachment thumbnails and `https:` images referenced in request markdown. Those images are thumbnails; a click opens them in a dialog. `javascript:` image URLs are not rendered.
 - The dashboard script is `/assets/dashboard.js` on the UI host. Pages do not use inline event handlers. `connect-src 'self'` allows the board poll.
 - `x-content-type-options: nosniff`
 - `referrer-policy: no-referrer`

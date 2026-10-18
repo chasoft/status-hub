@@ -32,6 +32,28 @@ function linkHtml(href: string, text: string): string {
   return `<a href="${escHtml(href)}" target="_blank" rel="noopener noreferrer">${text}<span class="ext-icon">${EXT_ICON}<span class="sr"> (opens in a new tab)</span></span></a>`;
 }
 
+/** Same-origin path or public http(s). javascript: and other schemes are dropped. */
+export function safeImageSrc(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 2000 || /[\u0000-\u001f\s"'<>]/.test(trimmed)) return null;
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return trimmed;
+  return safeHttpUrl(trimmed);
+}
+
+function imageVersion(src: string): string {
+  const match = /[?&]v=(\d+)/.exec(src);
+  return match?.[1] ?? "";
+}
+
+/** Thumbnail button. The lightbox script reads data-lb. */
+export function imageThumb(rawUrl: string, alt: string): string {
+  const src = safeImageSrc(rawUrl);
+  const name = alt.trim() || "Image";
+  if (!src) return escHtml(name);
+  const version = imageVersion(src);
+  return `<button type="button" class="md-thumb" data-lb data-src="${escHtml(src)}" data-name="${escHtml(name)}" data-version="${escHtml(version)}" data-download="${escHtml(src)}"><img src="${escHtml(src)}" alt="${escHtml(name)}"></button>`;
+}
+
 /** Inline marks. `text` is raw markdown, not HTML. */
 function inline(src: string): string {
   let out = "";
@@ -43,6 +65,17 @@ function inline(src: string): string {
         out += `<code>${escHtml(src.slice(i + 1, end))}</code>`;
         i = end + 1;
         continue;
+      }
+    }
+    if (src.startsWith("![", i)) {
+      const close = src.indexOf("]", i + 2);
+      if (close > i && src[close + 1] === "(") {
+        const endParen = src.indexOf(")", close + 2);
+        if (endParen > close) {
+          out += imageThumb(src.slice(close + 2, endParen), src.slice(i + 2, close));
+          i = endParen + 1;
+          continue;
+        }
       }
     }
     if (src[i] === "[") {
@@ -124,6 +157,13 @@ export function renderMarkdown(src: string): string {
     }
     if (!line.trim()) {
       flushPara();
+      i += 1;
+      continue;
+    }
+    const imageOnly = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(line.trim());
+    if (imageOnly) {
+      flushPara();
+      blocks.push(imageThumb(imageOnly[2]!, imageOnly[1]!));
       i += 1;
       continue;
     }

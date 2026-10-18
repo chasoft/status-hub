@@ -223,13 +223,14 @@ td,th{border-bottom:1px solid var(--bd);padding:6px 8px;text-align:left;vertical
 .ext{vertical-align:-1px;margin-left:3px}
 dialog{border:1px solid var(--bd);border-radius:14px;background:var(--card);color:var(--tx);padding:0;box-shadow:var(--shadow);max-width:min(560px,calc(100vw - 32px))}
 dialog::backdrop{background:#0007}
-dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,100vw);border-radius:0;border-width:0 0 0 1px;max-width:none}
-.dialog-bar,.drawer-bar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--bd)}
-.dialog-bar h2,.drawer-bar h2{margin:0;font-size:16px;flex:1}
-.dialog-body{padding:14px;overflow:auto;max-height:min(70dvh,640px)}
-.drawer-body{overflow:hidden;display:flex;flex-direction:column;height:calc(100dvh - 54px);padding:0}
-.page-fill,.task-main{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:12px 16px 16px}
-.task-main{padding-bottom:0}
+dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,100vw);border-radius:0;border-width:0 0 0 1px;max-width:none;display:flex;flex-direction:column;overflow:hidden}
+.dialog-bar,.drawer-bar{display:flex;align-items:center;gap:8px;padding:16px;border-bottom:1px solid var(--bd);flex:none}
+.dialog-bar h2,.drawer-bar h2{margin:0;font-size:16px;flex:1;min-width:0}
+.dialog-body{padding:16px;overflow:auto;max-height:min(70dvh,640px)}
+.drawer-body{overflow:hidden;display:flex;flex-direction:column;flex:1;min-height:0;padding:16px;min-width:0}
+.drawer-body>.task{flex:1;min-height:0;min-width:0}
+.page-fill,.task-main{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:16px}
+.task-main{padding-bottom:16px}
 .page-fill>.back,.task-main>.back{flex:none;margin:0 0 8px}
 .sheets{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px}
 .sheet{display:flex;flex-direction:column;min-height:0;flex:1 1 0}
@@ -237,17 +238,18 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .sheet-h{flex:none;margin:0 0 6px}
 .sheet-scroll{flex:1;min-height:0;overflow:auto}
 .task{display:flex;flex-direction:column;flex:1;min-height:0}
-.task-tabs{display:flex;flex:none;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--bd)}
+.task-tabs{display:flex;flex:none;gap:4px;padding:0 0 0;margin:0 0 12px;border-bottom:1px solid var(--bd)}
 .task-tabs [role="tab"]{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;border-bottom:0;border-radius:var(--radius) var(--radius) 0 0;background:transparent;color:var(--mut);text-decoration:none;padding:6px 10px}
 .task-tabs [role="tab"][aria-selected="true"]{background:var(--card);color:var(--tx);border-color:var(--bd);font-weight:650}
 .task-panel{display:none;flex:1;min-height:0;flex-direction:column}
 .task-panel.is-on{display:flex}
-.tab-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 14px}
-.feedback-pane{flex:0 0 auto;display:flex;flex-direction:column;min-height:10.5rem;max-height:40%;border-top:1px solid var(--bd);background:var(--card)}
-.feedback-pane .sheet-h{margin:8px 14px 4px}
-.feedback-pane .sheet-scroll{flex:1;min-height:6.5rem;overflow:auto;padding:0 14px 8px}
-.feedback-dock{flex:none;display:flex;gap:8px;align-items:flex-end;padding:8px 12px;border-top:1px solid var(--bd);background:var(--card);position:sticky;bottom:0;z-index:2}
-.feedback-dock textarea{flex:1;width:auto;max-width:none;min-height:2.25rem;max-height:8rem;resize:vertical;line-height:1.4}
+.tab-scroll{flex:1 1 auto;min-height:0;min-width:0;overflow:auto;padding:0}
+.feedback-pane{flex:0 0 auto;display:flex;flex-direction:column;min-height:10.5rem;max-height:40%;min-width:0;margin-top:16px;padding-top:12px;border-top:1px solid var(--bd);background:var(--card)}
+.feedback-pane .sheet-h{margin:0 0 8px}
+.feedback-pane .sheet-scroll{flex:1;min-height:6.5rem;min-width:0;overflow:auto;padding:0 0 8px}
+.feedback-dock{flex:none;display:flex;gap:8px;align-items:flex-end;min-width:0;padding:12px 0 0;border-top:1px solid var(--bd);background:var(--card);position:sticky;bottom:0;z-index:2}
+.feedback-dock textarea{flex:1 1 auto;width:auto;max-width:none;min-width:0;min-height:2.25rem;max-height:8rem;resize:vertical;line-height:1.4}
+.feedback-dock button{flex:0 0 auto}
 .feedback-dock textarea:focus{min-height:4.75rem}
 .inline-edit{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
 .ie-view,.ie-form{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
@@ -261,32 +263,83 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .ie-msg:empty{display:none}
 .inline-edit.is-saving .ie-msg{color:var(--mut)}
 .ie-value{min-width:0;overflow-wrap:anywhere}
-.request-doc{margin:0 0 16px}
-.request-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 8px}
-.request-bar h3{margin:0}
-.request-meta{color:var(--mut);font-size:12px}
-.request-pick{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:0}
-.request-pick select,.request-pick button,.attach-form input,.attach-form button{padding:5px 8px;border-radius:var(--radius)}
+.panel{border:1px solid var(--bd);border-radius:var(--radius);background:var(--card);padding:16px;margin:0 0 16px;min-width:0}
+.panel-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.panel-h h3{margin:0;font-size:14px}
+.panel-h .head-pen{margin-left:auto}
+.request-doc:has(.is-editing) .head-pen{display:none}
+.request-meta{color:var(--mut);font-size:12px;min-width:0}
+.request-pick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0}
+.request-pick select{width:auto;min-width:4.5rem;padding:2px 6px}
+.request-pick button,.clamp-toggle{padding:2px 8px}
 .request-edit{width:100%;align-items:stretch}
-.request-edit .ie-view,.request-edit .ie-form{align-items:flex-start;width:100%}
-.request-edit .ie-form{flex-direction:column}
-.request-edit textarea{width:100%;min-height:12rem;max-width:none;padding:8px}
-.md-preview{width:100%;border:1px dashed var(--bd);border-radius:var(--radius);padding:8px;background:var(--card)}
-.md :is(h1,h2,h3,h4){margin:.7em 0 .3em;line-height:1.25}
-.md p,.md ul,.md ol,.md blockquote{margin:.4em 0}
+.request-edit .ie-view,.request-edit .ie-form{display:flex;flex-direction:column;align-items:stretch;width:100%;min-width:0}
+.request-edit textarea{width:100%;min-height:10rem;max-width:none;padding:8px}
+.request-clamp{max-height:calc(1.45em * 12);overflow:hidden}
+.request-clamp.is-open{max-height:none}
+.clamp-toggle{align-self:flex-start;background:transparent;border:0;color:var(--accent);padding:4px 0}
+.md-preview{width:100%;border:1px dashed var(--bd);border-radius:var(--radius);padding:8px;background:var(--bg)}
+.md{font-size:13px;line-height:1.45}
+.md h1{font-size:15px}
+.md h2{font-size:14px}
+.md h3,.md h4{font-size:13px}
+.md :is(h1,h2,h3,h4){margin:.45em 0 .2em;line-height:1.25;font-weight:650}
+.md p,.md ul,.md ol,.md blockquote{margin:.35em 0}
 .md pre{overflow:auto;background:var(--cell);padding:8px;border-radius:var(--radius)}
 .md code{font:12px ui-monospace,monospace}
 .md blockquote{border-left:3px solid var(--bd);padding-left:8px;color:var(--mut)}
 .md hr{border:0;border-top:1px solid var(--bd)}
-.attach-groups{display:flex;flex-direction:column;gap:14px;margin:0 0 16px}
-.attach-group h3{margin:0 0 6px}
-.attach-preview{display:block;max-width:min(100%,360px);max-height:220px;object-fit:contain;border:1px solid var(--bd);border-radius:var(--radius);background:var(--cell);margin-top:6px}
-.attach-form{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:8px}
+.md-thumb,.thumb{width:80px;height:80px;padding:0;overflow:hidden;flex:none;background:var(--cell);border-radius:var(--radius);line-height:0}
+.md-thumb img,.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.file-icon{width:80px;height:80px;flex:none;display:grid;place-items:center;background:var(--cell);border:1px solid var(--bd);border-radius:var(--radius);color:var(--mut)}
+.attach-groups{display:flex;flex-direction:column;gap:16px;margin:0 0 16px}
+.group-h{display:flex;align-items:center;gap:8px;margin:0 0 4px}
+.group-h h3{margin:0;font-size:14px;flex:1}
+.file-list{list-style:none;margin:0;padding:0}
+.file-row{display:flex;align-items:center;gap:12px;min-width:0;padding:8px 0;border-top:1px solid var(--bd)}
+.file-main{flex:1;min-width:0}
+.file-name{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-weight:650;overflow-wrap:anywhere}
+.file-open{background:transparent;border:0;padding:0;font-weight:650;text-align:left}
+.file-meta{color:var(--mut);font-size:12px}
+.file-actions{display:flex;gap:2px;flex:none}
+.file-actions a,.file-actions button{padding:4px;line-height:0;background:transparent}
+.attach-links{list-style:none;margin:8px 0 0;padding:0}
+.attach-links li{padding:4px 0}
 .diff-line{display:flex;gap:8px;font:12px ui-monospace,monospace;white-space:pre-wrap;padding:0 4px}
+.dropzone{border:1px dashed var(--bd);border-radius:var(--radius);padding:16px;text-align:center;background:var(--cell);margin:0 0 12px}
+.dropzone.is-over{border-color:var(--accent)}
+.dropzone input{display:block;margin:8px auto 0;max-width:100%}
+.hist-pop{border-radius:var(--radius);padding:12px;max-width:min(420px,calc(100vw - 32px))}
+.hist-pop table{font-size:12px}
+.hist-compare{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:8px}
+.hist-compare select{width:auto;min-width:4.5rem}
+dialog.file-dialog{max-width:min(440px,calc(100vw - 32px))}
+dialog.lightbox{width:min(96vw,1100px);max-width:min(96vw,1100px);max-height:96dvh;border-radius:var(--radius)}
+.lb-bar,.lb-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px}
+.lb-bar{border-bottom:1px solid var(--bd)}
+.lb-bar h2{margin:0;font-size:15px;flex:1;min-width:0}
+.lb-tools{padding-top:0}
+.lb-tools select{width:auto;min-width:4.5rem}
+.lb-stage{margin:0 16px 16px;height:min(72dvh,760px);min-height:240px;background:var(--cell);border-radius:var(--radius);position:relative;overflow:hidden}
+.lb-single{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.split{position:relative;width:100%;height:100%;touch-action:none;user-select:none}
+.split img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
+.split-clip{position:absolute;top:0;bottom:0;left:0;overflow:hidden}
+.split-bar{position:absolute;top:0;bottom:0;width:28px;margin-left:-14px;border:0;background:transparent;cursor:ew-resize;padding:0}
+.split-bar::after{content:"";position:absolute;top:0;bottom:0;left:13px;width:2px;background:#fff;box-shadow:0 0 0 1px #0008}
+.split-label{position:absolute;top:8px;z-index:1;background:#000b;color:#fff;font-size:12px;padding:2px 6px;border-radius:var(--radius)}
+.split-label.left{left:8px}
+.split-label.right{right:8px}
+.lb-side{display:grid;grid-template-columns:1fr 1fr;gap:8px;height:100%;padding:8px}
+.lb-side figure{margin:0;min-width:0;min-height:0;display:flex;flex-direction:column;gap:4px}
+.lb-side img{flex:1;min-height:0;width:100%;object-fit:contain;background:var(--bg);border-radius:var(--radius)}
+.lb-side figcaption{font-size:12px;color:var(--mut)}
+.tab-scroll>h2{margin:0 0 12px;font-size:16px}
 .diff-add{background:#e7f6ec}
 .diff-del{background:#fdeceb}
 .diff-mark{width:1ch;flex:none}
 [popover]{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:12px;box-shadow:var(--shadow);max-width:min(360px,calc(100vw - 24px));max-height:min(70dvh,520px);overflow:auto}
+.hist-pop[popover]{border-radius:var(--radius);max-width:min(420px,calc(100vw - 32px))}
 .quick{list-style:none;margin:8px 0;padding:0}
 .quick a{display:flex;justify-content:space-between;gap:8px;padding:4px 0;color:var(--tx)}
 .row{display:flex;gap:8px;justify-content:flex-end}
@@ -314,7 +367,7 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
   .cell{min-width:78vw;scroll-snap-align:start;flex:none;overflow-x:hidden;overflow-y:visible}
   .feedback-dock{position:sticky;bottom:0}
   .lane-side{display:none}
-  dialog.drawer{width:100vw}
+  dialog.drawer{width:100vw;overflow:auto}
 }
 @media (prefers-color-scheme: dark){
   .lead{background:#2a2418}
@@ -831,6 +884,23 @@ function taskTabOf(raw?: string | null): TaskTab {
 const ICON_PEN = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M11.2 2.8l2 2L5.5 12.5 3 13l.5-2.5 7.7-7.7z"/></svg>`;
 const ICON_OK = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5 6.5 12 13 4"/></svg>`;
 const ICON_X = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 4l8 8M12 4l-8 8"/></svg>`;
+const ICON_DOWNLOAD = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M8 2.5v7M5.5 7.5 8 10l2.5-2.5M3.5 13.5h9"/></svg>`;
+const ICON_UPLOAD = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M8 10.5v-7M5.5 5.5 8 3l2.5 2.5M3.5 13.5h9"/></svg>`;
+const ICON_HISTORY = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M8 4.5V8l2.2 1.4M3.2 8a4.8 4.8 0 1 0 1-2.8"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3.2 3.2v2.4h2.4"/></svg>`;
+const ICON_FILE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M7 3.5h7l5 5V20.5H7z"/><path fill="none" stroke="currentColor" stroke-width="1.6" d="M14 3.5V9h5"/></svg>`;
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${n} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
+function attachmentSrc(code: string, id: number, version: number): string {
+  return `/t/${encodeURIComponent(code)}/attachments/${id}?v=${version}`;
+}
 
 function dueInputValue(ms: number | null | undefined, offsetMinutes: number): string {
   if (!ms) return "";
@@ -874,20 +944,18 @@ function taskPanel(id: TaskTab, active: TaskTab, body: string): string {
 
 function appliesLabel(version: unknown, raw: unknown): string {
   const parts: string[] = [];
-  parts.push(version != null && version !== "" ? `Request v${esc(version)}` : "No request version");
+  if (version != null && version !== "") parts.push(`req v${esc(version)}`);
   let ref: OutputRef | null = null;
   if (typeof raw === "string" && raw) {
     try { ref = JSON.parse(raw) as OutputRef; } catch { ref = null; }
   } else if (raw && typeof raw === "object") ref = raw as OutputRef;
-  const files = (ref?.attachments ?? []).map((item) => `${esc(item.name)} v${esc(item.version)}`);
-  const links = (ref?.links ?? []).filter((item) => typeof item === "string").map((item) => externalAnchor(item));
-  const rest = [...files, ...links];
-  if (rest.length) parts.push(rest.join(", "));
-  return parts.join(" · ");
+  for (const item of ref?.attachments ?? []) parts.push(`${esc(item.name)} v${esc(item.version)}`);
+  for (const item of ref?.links ?? []) if (typeof item === "string") parts.push(externalAnchor(item));
+  return parts.join(" · ") || "—";
 }
 
-function versionOptions(versions: { version: number; author_id: string; at: number }[], selected: number | null, tz: number): string {
-  return versions.map((item) => `<option value="${item.version}"${item.version === selected ? " selected" : ""}>v${item.version} · ${esc(item.author_id)} · ${fmt(item.at, tz)}</option>`).join("");
+function versionOptions(versions: { version: number }[], selected: number | null): string {
+  return versions.map((item) => `<option value="${item.version}"${item.version === selected ? " selected" : ""}>v${item.version}</option>`).join("");
 }
 
 async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL): Promise<string | null> {
@@ -972,47 +1040,67 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
       }
     } catch { /* keep the rendered version */ }
   }
+  const comparing = !!(diffRaw && Number.isInteger(Number(diffRaw)));
+  const diffSelected = comparing ? Number(diffRaw) : null;
   const versionPicker = doc.versions.length ? `<form method="get" class="request-pick" action="${esc(action)}">
 <input type="hidden" name="tab" value="overview">
-<label>Version <select name="rv" aria-label="Request version">${versionOptions(doc.versions, shown.version, tz)}</select></label>
-<label>Diff with <select name="diff" aria-label="Diff with version"><option value="">None</option>${versionOptions(doc.versions, diffRaw && Number.isInteger(Number(diffRaw)) ? Number(diffRaw) : null, tz)}</select></label>
-<button type="submit">Show</button></form>` : "";
-  const requestMeta = shown.version ? `<span class="request-meta">v${shown.version} · ${esc(shown.author_id)} · ${fmt(shown.at, tz)}${shown.note ? ` · ${esc(shown.note)}` : ""}</span>` : `<span class="request-meta">No versions yet</span>`;
+<label>Version <select name="rv" aria-label="Request version">${versionOptions(doc.versions, shown.version)}</select></label>
+<button type="button" data-compare-toggle aria-expanded="${comparing ? "true" : "false"}">Compare</button>
+<label class="diff-field"${comparing ? "" : " hidden"}>With <select name="diff" aria-label="Compare with version"><option value="">Select</option>${versionOptions(doc.versions, diffSelected)}</select></label>
+</form>` : "";
+  const requestMeta = shown.version ? `<span class="request-meta">${esc(shown.author_id)} · ${fmt(shown.at, tz)}${shown.note ? ` · ${esc(shown.note)}` : ""}</span>` : `<span class="request-meta">No versions yet</span>`;
+  const requestBody = `<div class="ie-view"${requestError ? " hidden" : ""}><div class="request-clamp" data-clamp>${requestView}</div><button type="button" class="clamp-toggle" data-clamp-toggle hidden>Show more</button></div>`;
   const requestEditor = canEdit
-    ? `<form class="inline-edit request-edit${requestError ? " is-editing" : ""}" method="post" action="${esc(action)}" data-inline-edit data-inline-kind="markdown" data-preview="/t/${encodeURIComponent(code)}/request-preview" novalidate>
-<span class="ie-view"${requestError ? " hidden" : ""}><span class="ie-value">${requestView}</span><button type="button" class="ie-pen" data-inline-open aria-label="Edit request">${ICON_PEN}</button></span>
+    ? `<form id="request-editor" class="inline-edit request-edit${requestError ? " is-editing" : ""}" method="post" action="${esc(action)}" data-inline-edit data-inline-kind="markdown" data-preview="/t/${encodeURIComponent(code)}/request-preview" novalidate>
+${requestBody}
 <span class="ie-form"${requestError ? "" : " hidden"}><textarea name="request_body" data-original="${esc(shown.markdown ?? REQUEST_TEMPLATE)}" aria-label="Request markdown">${esc(requestDraft)}</textarea>
 <label>Change note <input name="request_note" maxlength="500" aria-label="Change note" placeholder="What changed"></label>
 <div class="md md-preview" data-md-preview></div>
-<button type="submit" class="ie-save" aria-label="Save request">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel request">${ICON_X}</button></span>
+<span class="row"><button type="submit" class="ie-save" aria-label="Save request">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel request">${ICON_X}</button></span></span>
 <span class="ie-msg" role="status">${requestError ? esc(requestError) : ""}</span></form>`
-    : requestView;
-  const requestBlock = `<section class="request-doc" id="request"><div class="request-bar"><h3>Request</h3>${requestMeta}${versionPicker}</div>${requestEditor}</section>`;
+    : requestBody;
+  const requestPen = canEdit ? `<button type="button" class="ie-pen head-pen" data-inline-open data-inline-target="request-editor" aria-label="Edit request">${ICON_PEN}</button>` : "";
+  const requestBlock = `<section class="panel request-doc" id="request"><div class="panel-h"><h3>Request</h3>${requestMeta}${versionPicker}${requestPen}</div>${requestEditor}</section>`;
   const files = attachmentsEnabled ? await listAttachments(db, code) : { requirement: [], output: [] };
   const links = (await attachmentSummary(db, code)).output_links;
-  const fileLink = (id: number, version: number, label: string) => `<a href="/t/${encodeURIComponent(code)}/attachments/${id}?v=${version}">${esc(label)}</a>`;
-  const historyTableFor = (item: { id: number; versions: { version: number; mime: string; bytes: number; author_id: string; at: number; note: string | null }[] }) => `<details open><summary>History (${item.versions.length})</summary><table><thead><tr><th>Version</th><th>Type</th><th>Bytes</th><th>By</th><th>When</th><th>Note</th></tr></thead><tbody>${item.versions.map((v) => `<tr><td>${fileLink(item.id, v.version, `v${v.version}`)}</td><td>${esc(v.mime)}</td><td>${v.bytes}</td><td>${esc(v.author_id)}</td><td>${fmt(v.at, tz)}</td><td>${esc(v.note ?? "")}</td></tr>`).join("")}</tbody></table></details>`;
   const groupHtml = (title: string, group: "requirement" | "output", items: typeof files.requirement) => {
-    const rows = items.map((item) => `<tr><td>${esc(item.name)}</td><td>${fileLink(item.id, item.latest.version, `v${item.latest.version}`)}</td><td>${esc(item.latest.mime)}</td><td>${item.latest.bytes}</td><td>${esc(item.latest.author_id)}</td><td>${fmt(item.latest.at, tz)}</td></tr>${isImageMime(item.latest.mime) ? `<tr><td colspan="6"><img class="attach-preview" src="/t/${encodeURIComponent(code)}/attachments/${item.id}?v=${item.latest.version}" alt="${esc(item.name)}"></td></tr>` : ""}<tr><td colspan="6">${historyTableFor(item)}</td></tr>`).join("");
-    const upload = canEdit && attachmentsEnabled ? `<form method="post" action="/t/${encodeURIComponent(code)}/attachments" enctype="multipart/form-data" class="attach-form">
-<input type="hidden" name="group" value="${group}">
-<label>Name <input name="name" required maxlength="200" aria-label="${esc(title)} name"></label>
-<label>File <input type="file" name="file" required aria-label="${esc(title)} file"></label>
-<label>Note <input name="note" maxlength="500" aria-label="${esc(title)} note"></label>
-<button type="submit">Upload</button></form>` : "";
-    const linkForm = group === "output" && canEdit ? `<form method="post" action="/t/${encodeURIComponent(code)}/output-link" class="attach-form">
-<label>Output link <input type="url" name="url" required placeholder="https://" aria-label="Output link" value="${esc(fieldError("output_link") ? notice?.value ?? "" : "")}"></label>
-<label>Note <input name="note" maxlength="500" aria-label="Output link note"></label>
-<button type="submit">Add link</button></form>` : "";
+    const rows = items.map((item) => {
+      const src = attachmentSrc(code, item.id, item.latest.version);
+      const image = isImageMime(item.latest.mime);
+      const versions = esc(JSON.stringify(item.versions.map((v) => ({ version: v.version, src: attachmentSrc(code, item.id, v.version) }))));
+      const lead = image
+        ? `<button type="button" class="thumb" data-lb data-id="${item.id}" data-src="${esc(src)}" data-name="${esc(item.name)}" data-version="${item.latest.version}" data-download="${esc(src)}" data-versions="${versions}" aria-label="Preview ${esc(item.name)}"><img src="${esc(src)}" alt=""></button>`
+        : `<span class="file-icon">${ICON_FILE}</span>`;
+      const name = image
+        ? `<button type="button" class="file-open" data-lb-open="${item.id}">${esc(item.name)}</button>`
+        : esc(item.name);
+      const historyId = `hist-${group}-${item.id}`;
+      const older = item.versions[1]?.version ?? item.versions[0]?.version;
+      const historyRows = item.versions.map((v) => {
+        const href = attachmentSrc(code, item.id, v.version);
+        const verCell = image
+          ? `<button type="button" data-lb-jump="${item.id}" data-src="${esc(href)}" data-version="${v.version}">v${v.version}</button>`
+          : `v${v.version}`;
+        return `<tr><td>${verCell}</td><td>${esc(formatBytes(v.bytes))}</td><td>${esc(v.author_id)}</td><td>${fmt(v.at, tz)}</td><td>${esc(v.note ?? "")}</td><td><a href="${esc(href)}" aria-label="Download ${esc(item.name)} v${v.version}">${ICON_DOWNLOAD}</a></td></tr>`;
+      }).join("");
+      const compare = image && item.versions.length > 1 ? `<div class="hist-compare"><label>Left <select data-cmp-left aria-label="Left version">${versionOptions(item.versions, older ?? null)}</select></label><label>Right <select data-cmp-right aria-label="Right version">${versionOptions(item.versions, item.latest.version)}</select></label><button type="button" data-open-compare data-id="${item.id}">Compare</button></div>` : "";
+      const pop = `<div id="${historyId}" class="hist-pop" popover><p><strong>${esc(item.name)}</strong></p><table><thead><tr><th>Version</th><th>Size</th><th>By</th><th>When</th><th>Note</th><th></th></tr></thead><tbody>${historyRows}</tbody></table>${compare}</div>`;
+      const uploadBtn = canEdit && attachmentsEnabled ? `<button type="button" data-dialog-open="add-file" data-file-group="${group}" data-file-name="${esc(item.name)}" aria-label="New version of ${esc(item.name)}">${ICON_UPLOAD}</button>` : "";
+      return `<li class="file-row">${lead}<div class="file-main"><div class="file-name">${name} <span class="pill">v${item.latest.version}</span></div><div class="file-meta">${esc(formatBytes(item.latest.bytes))} · ${esc(item.latest.author_id)} · ${fmt(item.latest.at, tz)}</div></div><div class="file-actions"><a href="${esc(src)}" aria-label="Download ${esc(item.name)}">${ICON_DOWNLOAD}</a>${uploadBtn}<button type="button" popovertarget="${historyId}" aria-label="History for ${esc(item.name)}">${ICON_HISTORY}</button></div>${pop}</li>`;
+    }).join("");
+    const add = canEdit && attachmentsEnabled ? `<button type="button" data-dialog-open="add-file" data-file-group="${group}">Add file</button>` : "";
     const linkRows = group === "output" ? links.map((item) => `<li>${externalAnchor(item.url)}${item.note ? ` · ${esc(item.note)}` : ""}</li>`).join("") : "";
-    const empty = !attachmentsEnabled && group === "output" ? "No output links." : `No ${title.toLowerCase()} files.`;
-    const fileTable = items.length
-      ? `<table><thead><tr><th>Name</th><th>Latest</th><th>Type</th><th>Bytes</th><th>By</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
-      : (group === "output" && links.length && !attachmentsEnabled ? "" : `<p class="empty">${esc(empty)}</p>`);
-    return `<section class="attach-group"><h3>${esc(title)}</h3>${fileTable}${upload}${linkRows ? `<ul class="attach-links">${linkRows}</ul>` : ""}${linkForm}</section>`;
+    const addLink = group === "output" && canEdit ? `<button type="button" data-dialog-open="add-link">Add link</button>` : "";
+    const empty = !items.length ? `<p class="empty">${esc(!attachmentsEnabled && group === "output" ? "No output links." : `No ${title.toLowerCase()} files.`)}</p>` : "";
+    const list = items.length ? `<ul class="file-list">${rows}</ul>` : (group === "output" && links.length && !attachmentsEnabled ? "" : empty);
+    return `<section class="panel attach-group"><div class="group-h"><h3>${esc(title)}</h3>${add}</div>${list}${linkRows ? `<ul class="attach-links">${linkRows}</ul>` : ""}${addLink}</section>`;
   };
   const attachError = fieldError("attachment") || fieldError("output_link");
+  const fileDialog = canEdit && attachmentsEnabled ? `<dialog id="add-file" class="file-dialog" aria-labelledby="add-file-title"><form method="post" action="/t/${encodeURIComponent(code)}/attachments" enctype="multipart/form-data"><div class="dialog-bar"><h2 id="add-file-title">Add file</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body"><input type="hidden" name="group" value="requirement"><div class="dropzone" data-dropzone><p data-file-label>Drop a file here, or choose one.</p><input type="file" name="file" required aria-label="File"></div><label>Name <input name="name" required maxlength="200" aria-label="File name"></label><label>Note <input name="note" maxlength="500" aria-label="File note"></label><p class="row"><button type="submit">Upload</button></p></div></form></dialog>` : "";
+  const linkDialog = canEdit ? `<dialog id="add-link" class="file-dialog" aria-labelledby="add-link-title"><form method="post" action="/t/${encodeURIComponent(code)}/output-link"><div class="dialog-bar"><h2 id="add-link-title">Add output link</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body"><label>Output link <input type="url" name="url" required placeholder="https://" aria-label="Output link" value="${esc(fieldError("output_link") ? notice?.value ?? "" : "")}"></label><label>Note <input name="note" maxlength="500" aria-label="Output link note"></label><p class="row"><button type="submit">Add link</button></p></div></form></dialog>` : "";
+  const lightbox = `<dialog id="lightbox" class="lightbox" aria-labelledby="lb-title"><div class="lb-bar"><button type="button" data-lb-prev aria-label="Previous image">Prev</button><h2 id="lb-title">Image</h2><span id="lb-ver" class="pill"></span><a id="lb-download" href="#">Download</a><button type="button" data-lb-mode="split" hidden>Split</button><button type="button" data-lb-mode="side" hidden>Side by side</button><button type="button" data-lb-next aria-label="Next image">Next</button><button type="button" data-close-dialog aria-label="Close preview">Close</button></div><div class="lb-tools" hidden><label>Left <select id="lb-left" aria-label="Left version"></select></label><label>Right <select id="lb-right" aria-label="Right version"></select></label></div><div id="lb-stage" class="lb-stage"></div></dialog>`;
   const attachmentsBlock = `<section class="attach-groups" id="attachments">${attachError ? `<p class="flag">${esc(attachError)}</p>` : ""}${attachmentsEnabled ? groupHtml("Requirement", "requirement", files.requirement) + groupHtml("Output", "output", files.output) : groupHtml("Output links", "output", [])}</section>`;
+  const taskDialogs = `${fileDialog}${linkDialog}${lightbox}`;
   const overviewBadge = unread ? ` <span class="count is-on">${unread}</span>` : "";
   const fieldRow = (label: string, value: string) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
   const overview = `<div class="tab-scroll">${requestBlock}${attachmentsBlock}<h2>${esc(code)}</h2>
@@ -1042,6 +1130,7 @@ ${taskPanel("overview", active, overview)}
 ${taskPanel("timeline", active, `${sheet("h3", "Time in status", periodsTable)}${sheet("h3", "Totals", totalsTable, true)}`)}
 ${taskPanel("history", active, sheet("h3", "History", historyTable))}
 ${taskPanel("blockers", active, sheet("h3", "Blockers", blockerTable))}
+${taskDialogs}
 </div>`;
 }
 

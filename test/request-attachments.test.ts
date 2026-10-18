@@ -4,6 +4,7 @@ import { ATTACHMENTS_UNAVAILABLE, addAttachmentBytes, attachmentPolicy, decodeBa
 import * as core from "../src/core";
 import { diffLines } from "../src/diff";
 import { renderMarkdown } from "../src/markdown";
+import { fmt } from "../src/ui";
 import { accessJwt, fullRequest, issueToken, mcpCall, member, MCP, UI, worker } from "./helpers";
 
 const T0 = Date.UTC(2026, 9, 18, 3, 0);
@@ -144,7 +145,9 @@ describe("attachments and review", () => {
     expect(page).toContain(">Output<");
     expect(page).toContain("notes.txt");
     expect(page).toContain("shot.png");
-    expect(page).toContain("History (2)");
+    expect(page).toContain("History for notes.txt");
+    expect(page).toContain("Add file");
+    expect(page).not.toContain("attach-preview");
     expect(page).toContain(`src="/t/${code}/attachments/${shot.id}?v=1"`);
     expect(page).not.toContain(first.r2_key);
 
@@ -239,7 +242,7 @@ describe("attachments and review", () => {
     await core.addLeadershipFeedback(env.DB, { task: code, author: "Owner", note: "looks good" }, T0 + 9);
     const page = await (await ui(`/t/${code}?tab=overview`)).text();
     expect(page).toContain("looks good");
-    expect(page).toContain("Request v1");
+    expect(page).toContain("req v1");
     expect(page).toContain("done.png v1");
 
     const other = await task("link output");
@@ -266,5 +269,17 @@ describe("markdown sanitizer", () => {
     expect(html).toContain("onerror=&quot;");
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain("javascript:");
+    const shot = renderMarkdown("![spec.png](/t/APP-CORE-001.1/attachments/1?v=2)\n\n![remote](https://example.com/a.png)\n\n![bad](javascript:alert(1))");
+    expect(shot).toContain('class="md-thumb"');
+    expect(shot).toContain('src="/t/APP-CORE-001.1/attachments/1?v=2"');
+    expect(shot).toContain('data-version="2"');
+    expect(shot).toContain('src="https://example.com/a.png"');
+    expect(shot).not.toContain("javascript:");
+  });
+
+  it("formats timestamps in the configured offset", () => {
+    const at = Date.UTC(2026, 9, 18, 1, 23);
+    expect(fmt(at, 0)).toBe("18/10 01:23");
+    expect(fmt(at, 420)).toBe("18/10 08:23");
   });
 });
