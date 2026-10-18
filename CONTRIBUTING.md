@@ -21,7 +21,7 @@ CI on pull requests and on pushes to `main` runs `pnpm install --frozen-lockfile
 
 ## Migrations
 
-D1 applies each file in [migrations/](migrations) once and records the filename. Do not rename `0001` through `0007`. Put a new schema change in the next number (`0008` or later) and make it additive, so a database that already applied the earlier files can move forward.
+D1 applies each file in [migrations/](migrations) once and records the filename. Do not rename `0001` through `0010`. Put a new schema change in the next number (`0011` or later) and make it additive, so a database that already applied the earlier files can move forward.
 
 `0002_seed.sql` is intentionally a no-op. Production does not ship sample members or projects.
 
@@ -36,6 +36,9 @@ D1 applies each file in [migrations/](migrations) once and records the filename.
 | `src/config.ts` | Env parsing. |
 | `src/ui.ts` | Server-rendered HTML. |
 | `src/dashboard-client.ts` | Dashboard script served at `/assets/dashboard.js`. |
+| `src/markdown.ts` | Sanitized markdown for the request document. |
+| `src/attachments.ts` | R2 uploads, version rows, and authenticated downloads. |
+| `src/diff.ts` | Line diff between request versions. |
 | `test/` | Vitest coverage for the rules above. |
 
 Identity stays on the bot token or the verified UI email (`AUTH_MODE=access` or `AUTH_MODE=token`). Tool arguments and form fields do not choose the caller. Follow that in new tools.

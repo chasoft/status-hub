@@ -39,22 +39,22 @@ describe("review requires a reviewer", () => {
       await env.DB.prepare("UPDATE members SET active = 1 WHERE id = 'daniel'").run();
     }
 
-    await expect(core.reportStatus(env.DB, peter, { task: code, status: "review", reviewer: " quinn " }, T0 + 5))
+    await expect(core.reportStatus(env.DB, peter, { task: code, status: "review", reviewer: " quinn ", links: ["https://example.com/output/review"] }, T0 + 5))
       .resolves.toMatchObject({ from: "in_progress", to: "review" });
     expect((await core.getTask(env.DB, code)).task.reviewer_id).toBe("quinn");
 
     await core.reportStatus(env.DB, peter, { task: code, status: "in_progress" }, T0 + 6);
-    await core.reportStatus(env.DB, peter, { task: code, status: "review" }, T0 + 7);
+    await core.reportStatus(env.DB, peter, { task: code, status: "review", links: ["https://example.com/output/review"] }, T0 + 7);
     expect((await core.getTaskRow(env.DB, code)).reviewer_id).toBe("quinn");
 
     await core.reportStatus(env.DB, peter, { task: code, status: "in_progress" }, T0 + 8);
-    await core.reportStatus(env.DB, peter, { task: code, status: "review", reviewer: "mira" }, T0 + 9);
+    await core.reportStatus(env.DB, peter, { task: code, status: "review", reviewer: "mira", links: ["https://example.com/output/review"] }, T0 + 9);
     expect((await core.getTaskRow(env.DB, code)).reviewer_id).toBe("mira");
   });
 
   it("shows the reviewer on the kanban card and the task page", async () => {
     const code = await assignedTask("peter", "visible reviewer", Date.now());
-    await core.reportStatus(env.DB, await member("peter"), { task: code, status: "review", reviewer: "jennifer" }, Date.now());
+    await core.reportStatus(env.DB, await member("peter"), { task: code, status: "review", reviewer: "jennifer", links: ["https://example.com/output/review"] }, Date.now());
     const h = { "Cf-Access-Jwt-Assertion": await accessJwt("owner@example.com") };
     const board = await (await worker.fetch(`${UI}/?project=STS`, { headers: h })).text();
     expect(board).toContain(code);
@@ -79,7 +79,7 @@ describe("mcp reviewer and list_my_tasks", () => {
     expect(bad.isError).toBe(true);
     expect(bad.data).toMatchObject({ error: "BAD_REQUEST", status: 400 });
     expect(bad.data.message).toMatch(/reviewer/i);
-    const ok = await mcpCall(peter, "report_status", { task: t, status: "review", reviewer: "quinn" });
+    const ok = await mcpCall(peter, "report_status", { task: t, status: "review", reviewer: "quinn", links: ["https://example.com/output/review"] });
     expect(ok.isError).toBe(false);
     expect(ok.data).toMatchObject({ to: "review", reviewer_id: "quinn" });
     const got = await mcpCall(peter, "get_task", { code: t });
@@ -97,13 +97,13 @@ describe("list_my_tasks filters and pages", () => {
     const anna = await member("anna");
     const mine = await assignedTask("anna", "anna doing");
     const review = await assignedTask("ethan", "anna reviews");
-    await core.reportStatus(env.DB, await member("ethan"), { task: review, status: "review", reviewer: "anna" }, T0 + 2);
+    await core.reportStatus(env.DB, await member("ethan"), { task: review, status: "review", reviewer: "anna", links: ["https://example.com/output/review"] }, T0 + 2);
     const other = await assignedTask("peter", "not anna");
     const done = await assignedTask("anna", "anna done");
-    await core.reportStatus(env.DB, anna, { task: done, status: "review", reviewer: "quinn" }, T0 + 3);
+    await core.reportStatus(env.DB, anna, { task: done, status: "review", reviewer: "quinn", links: ["https://example.com/output/review"] }, T0 + 3);
     await core.reportStatus(env.DB, anna, { task: done, status: "done", note: "xong" }, T0 + 4);
     const both = await assignedTask("anna", "anna both");
-    await core.reportStatus(env.DB, anna, { task: both, status: "review", reviewer: "anna" }, T0 + 5);
+    await core.reportStatus(env.DB, anna, { task: both, status: "review", reviewer: "anna", links: ["https://example.com/output/review"] }, T0 + 5);
 
     const asAssignee = await core.listMyTasks(env.DB, anna, "in_progress", T0 + 10);
     const assigneeCodes = asAssignee.tasks.map((t) => t.code);

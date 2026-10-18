@@ -12,7 +12,9 @@ Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 - **Table view.** Board | Table switches the same tasks to a sortable table (`?view=table`). A row opens the task drawer. The choice is remembered in the browser.
 - **Project, module, feature, and task codes.** Feature and task numbers are allocated inside one `db.batch()`, so two creates at the same time cannot take the same code.
 - **Pending approval.** A task waits in `pending_approval` until an admin approves or rejects it.
-- **Reviewer.** A move to `review` names an active member as reviewer when the task does not have one yet.
+- **Request document.** Each task can carry a markdown request (who, what, why, acceptance criteria, impacted areas). Edits append a version. The Overview tab renders the latest one.
+- **Attachments.** Requirement and Output files can be stored in R2, each with its own version history. Downloads stay on the UI host. Without the R2 binding, file uploads are hidden.
+- **Reviewer.** A move to `review` names an active member as reviewer when the task does not have one yet, and requires an Output attachment or an output link.
 - **Blockers.** A blocker records who the work is waiting on and moves the task to `blocked`.
 - **Alerts.** Every five minutes the Worker opens alerts for work that has not started, gone stale, stayed blocked, or passed its due time.
 - **Leadership feedback.** People named in the deployment config can leave a note on a task. The assignee sees it as unread until they open the task.
@@ -25,7 +27,7 @@ The lifecycle is in [docs/workflow.md](docs/workflow.md). Every environment vari
 
 ![Task drawer on the Timeline tab](docs/images/board-timeline.png)
 
-The board fills the viewport. On a desktop the page itself does not scroll: each column scrolls, and so does the task drawer. An expanded project row is only as tall as its cards, up to the board height, so collapsed rows sit directly underneath. With more than three projects, All projects starts with the swimlanes collapsed. `?project=CODE` keeps one project. The choice is stored in the browser. A task click opens a drawer; `/t/:code` remains the full page when you open it directly or without JavaScript. The task is split into Overview, Timeline, History, and Blockers. `?tab=` selects one, and the browser remembers the last tab. Leadership feedback is listed on Overview, and the note field stays pinned to the bottom of that tab. Editable fields (PR, links, assignee, reviewer, due date, priority) show the value with a pencil; the input replaces it in place. Create task, filters, and confirmations stay in dialogs and popovers. Links to another site open in a new tab. Buttons, inputs, and badges share a small corner radius.
+The board fills the viewport. On a desktop the page itself does not scroll: each column scrolls, and so does the task drawer. An expanded project row is only as tall as its cards, up to the board height, so collapsed rows sit directly underneath. With more than three projects, All projects starts with the swimlanes collapsed. `?project=CODE` keeps one project. The choice is stored in the browser. A task click opens a drawer; `/t/:code` remains the full page when you open it directly or without JavaScript. The task is split into Overview, Timeline, History, and Blockers. `?tab=` selects one, and the browser remembers the last tab. Leadership feedback is listed on Overview, and the note field stays pinned to the bottom of that tab. Editable fields (request, PR, links, assignee, reviewer, due date, priority) show the value with a pencil; the input replaces it in place. The request is markdown with a version picker and a diff. Requirement and Output files, when an R2 bucket is bound, sit under that with their own version history. Create task, filters, and confirmations stay in dialogs and popovers. Links to another site open in a new tab. Buttons, inputs, and badges share a small corner radius.
 
 `GET /api/board` returns the filtered board as JSON for the signed-in UI. The page polls it every 60 seconds and updates cards without closing the drawer or jumping the columns. Times use the configured timezone offset (UTC by default). The colors follow `prefers-color-scheme`.
 
@@ -39,9 +41,9 @@ The board fills the viewport. On a desktop the page itself does not scroll: each
 | `/members` | Active members, roles, and whether a token hash is stored. |
 | `/m/:id` | One member and their open tasks. |
 | `/p/:code` | One project, its modules, and its features. |
-| `/t/:code` | One task: request, reviewer, blockers, time in each status, history, leadership feedback, and the pull-request URL. From the board this opens as a drawer. |
+| `/t/:code` | One task. Overview shows the versioned request document, Requirement and Output attachments, reviewer, links, and leadership feedback. Timeline, History, and Blockers are the other tabs. From the board this opens as a drawer. |
 
-The UI hostname authenticates with `AUTH_MODE`. `access` (the default) expects a Cloudflare Access JWT, which the Worker verifies again, and checks an email allowlist. `token` serves a login page instead of Access. The MCP hostname serves only `/mcp` and always uses a bearer token. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
+The UI hostname authenticates with `AUTH_MODE`. `access` (the default) expects a Cloudflare Access JWT, which the Worker verifies again, and checks an email allowlist. `token` serves a login page instead of Access. The MCP hostname serves `/mcp` and `POST /attachment-uploads/:token` (the one-time attachment upload). Both require a bearer token. Any other path on that hostname returns 404. Any other hostname, including `workers.dev` and preview URLs, returns 403. `workers_dev` and `preview_urls` are off.
 
 ## Deploy in 10 minutes
 

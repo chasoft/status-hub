@@ -100,6 +100,14 @@ export const DASHBOARD_JS = `
       if (field && field.hasAttribute("data-original")) field.value = field.getAttribute("data-original") || "";
     }
   }
+  function editForm(node) {
+    const id = node.getAttribute("data-inline-target");
+    if (id) {
+      const found = document.getElementById(id);
+      if (found) return found;
+    }
+    return node.closest("[data-inline-edit]");
+  }
   function openEdit(form) {
     form.classList.add("is-editing");
     const view = form.querySelector(".ie-view");
@@ -108,7 +116,29 @@ export const DASHBOARD_JS = `
     if (editor) editor.hidden = false;
     const field = form.querySelector("input, select, textarea");
     if (field instanceof HTMLElement) field.focus();
+    if (form.getAttribute("data-inline-kind") === "markdown" && field instanceof HTMLTextAreaElement) schedulePreview(form, field.value);
   }
+  let previewTimer = 0;
+  function schedulePreview(form, value) {
+    const slot = form.querySelector("[data-md-preview]");
+    const url = form.getAttribute("data-preview");
+    if (!slot || !url) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      const data = new FormData();
+      data.set("body", value);
+      fetch(url, { method: "POST", body: data, headers: { accept: "application/json" } })
+        .then((res) => res.json())
+        .then((payload) => { if (payload && typeof payload.html === "string") slot.innerHTML = payload.html; })
+        .catch(() => {});
+    }, 180);
+  }
+  document.addEventListener("input", (event) => {
+    const field = event.target;
+    if (!(field instanceof HTMLTextAreaElement)) return;
+    const form = field.closest("[data-inline-kind='markdown']");
+    if (form) schedulePreview(form, field.value);
+  });
 
   function storageGet(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -477,6 +507,7 @@ export const DASHBOARD_JS = `
       slot.innerHTML = await res.text();
       const root = slot.querySelector(".task");
       if (root) applyTaskTab(root, false);
+      requestAnimationFrame(() => measureClamps(slot));
       const focus = slot.querySelector("[role='tab'][aria-selected='true']");
       if (focus instanceof HTMLElement) focus.focus();
     } catch (err) {
@@ -491,8 +522,143 @@ export const DASHBOARD_JS = `
     else if (node.classList.contains("group")) rememberGroup(node);
   }, true);
 
+  let lbIndex = 0;
+  let lbMode = "single";
+  let lbPos = 50;
+  let lbLeft = "";
+  let lbRight = "";
+  let lbSrc = "";
+  let lbVersion = "";
+  let splitDrag = null;
+
+  function htmlEsc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  }
+  function measureClamps(root) {
+    const scope = root || document;
+    scope.querySelectorAll("[data-clamp]").forEach((box) => {
+      const btn = box.parentElement && box.parentElement.querySelector("[data-clamp-toggle]");
+      if (!(btn instanceof HTMLButtonElement) || box.classList.contains("is-open")) return;
+      btn.hidden = box.scrollHeight <= box.clientHeight + 1;
+    });
+  }
+  function galleryOf(root) {
+    return Array.from((root || document).querySelectorAll("[data-lb]"));
+  }
+  function versionsOf(el) {
+    const raw = el.getAttribute("data-versions");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+  function versionSrc(versions, version) {
+    const found = versions.find((item) => String(item.version) === String(version));
+    return found ? found.src : "";
+  }
+  function layoutSplit(stage) {
+    if (!stage) return;
+    const clip = stage.querySelector(".split-clip");
+    const img = clip && clip.querySelector("img");
+    const bar = stage.querySelector("[data-split-bar]");
+    if (clip) clip.style.width = lbPos + "%";
+    if (img) {
+      img.style.width = stage.clientWidth + "px";
+      img.style.height = stage.clientHeight + "px";
+    }
+    if (bar) bar.style.left = lbPos + "%";
+    stage.setAttribute("aria-valuenow", String(Math.round(lbPos)));
+  }
+  function renderLightbox() {
+    const dlg = document.getElementById("lightbox");
+    const stage = document.getElementById("lb-stage");
+    if (!dlg || !stage) return;
+    const root = dlg.closest(".task") || document;
+    const items = galleryOf(root);
+    if (lbIndex >= items.length) lbIndex = Math.max(0, items.length - 1);
+    const el = items[lbIndex];
+    if (!el) return;
+    const versions = versionsOf(el);
+    const name = el.getAttribute("data-name") || "Image";
+    const title = document.getElementById("lb-title");
+    const ver = document.getElementById("lb-ver");
+    const download = document.getElementById("lb-download");
+    const tools = dlg.querySelector(".lb-tools");
+    const splitBtn = dlg.querySelector("[data-lb-mode='split']");
+    const sideBtn = dlg.querySelector("[data-lb-mode='side']");
+    const canCompare = versions.length > 1;
+    if (tools) tools.hidden = !canCompare;
+    if (splitBtn instanceof HTMLButtonElement) splitBtn.hidden = !canCompare;
+    if (sideBtn instanceof HTMLButtonElement) sideBtn.hidden = !canCompare;
+    if (canCompare && !lbLeft) lbLeft = String(versions[versions.length - 1].version);
+    if (canCompare && !lbRight) lbRight = String(versions[0].version);
+    const leftSel = document.getElementById("lb-left");
+    const rightSel = document.getElementById("lb-right");
+    if (canCompare && leftSel instanceof HTMLSelectElement && rightSel instanceof HTMLSelectElement && leftSel.options.length !== versions.length) {
+      const opts = versions.map((item) => '<option value="' + htmlEsc(item.version) + '">v' + htmlEsc(item.version) + "</option>").join("");
+      leftSel.innerHTML = opts;
+      rightSel.innerHTML = opts;
+    }
+    if (leftSel instanceof HTMLSelectElement && lbLeft) leftSel.value = String(lbLeft);
+    if (rightSel instanceof HTMLSelectElement && lbRight) rightSel.value = String(lbRight);
+    const singleSrc = lbSrc || el.getAttribute("data-src") || "";
+    const singleVer = lbVersion || el.getAttribute("data-version") || "";
+    if (title) title.textContent = name;
+    if (lbMode !== "single" && canCompare) {
+      const leftSrc = versionSrc(versions, lbLeft);
+      const rightSrc = versionSrc(versions, lbRight);
+      if (ver) ver.textContent = "v" + lbLeft + " · v" + lbRight;
+      if (download instanceof HTMLAnchorElement) {
+        download.href = rightSrc || leftSrc;
+        download.textContent = "Download v" + lbRight;
+      }
+      if (lbMode === "side") {
+        stage.innerHTML = '<div class="lb-side"><figure><img alt="" src="' + htmlEsc(leftSrc) + '"><figcaption>v' + htmlEsc(lbLeft) + '</figcaption></figure><figure><img alt="" src="' + htmlEsc(rightSrc) + '"><figcaption>v' + htmlEsc(lbRight) + "</figcaption></figure></div>";
+      } else {
+        stage.innerHTML = '<div class="split" data-split tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-label="Compare versions"><img alt="" src="' + htmlEsc(rightSrc) + '"><div class="split-clip"><img alt="" src="' + htmlEsc(leftSrc) + '"></div><button type="button" class="split-bar" data-split-bar aria-hidden="true"></button><span class="split-label left">v' + htmlEsc(lbLeft) + '</span><span class="split-label right">v' + htmlEsc(lbRight) + "</span></div>";
+        const split = stage.querySelector("[data-split]");
+        layoutSplit(split);
+        if (split instanceof HTMLElement) split.focus();
+      }
+    } else {
+      if (ver) ver.textContent = singleVer ? "v" + singleVer : "";
+      if (download instanceof HTMLAnchorElement) {
+        download.href = singleSrc;
+        download.textContent = "Download";
+      }
+      stage.innerHTML = '<img class="lb-single" alt="' + htmlEsc(name) + '" src="' + htmlEsc(singleSrc) + '">';
+    }
+    const prev = dlg.querySelector("[data-lb-prev]");
+    const next = dlg.querySelector("[data-lb-next]");
+    if (prev instanceof HTMLButtonElement) prev.disabled = lbIndex <= 0;
+    if (next instanceof HTMLButtonElement) next.disabled = lbIndex >= items.length - 1;
+  }
+  function openLightbox(el, opts) {
+    const root = el.closest(".task") || document;
+    const items = galleryOf(root);
+    const idx = items.indexOf(el);
+    lbIndex = idx >= 0 ? idx : 0;
+    lbMode = (opts && opts.mode) || "single";
+    lbPos = 50;
+    lbLeft = (opts && opts.left) || "";
+    lbRight = (opts && opts.right) || "";
+    lbSrc = (opts && opts.src) || "";
+    lbVersion = (opts && opts.version) || "";
+    const dlg = root.querySelector("#lightbox") || document.getElementById("lightbox");
+    if (dlg instanceof HTMLDialogElement && !dlg.open) dlg.showModal();
+    renderLightbox();
+    requestAnimationFrame(() => layoutSplit(document.querySelector("#lightbox [data-split]")));
+  }
+
   document.addEventListener("click", (event) => {
     const target = event.target;
+    if (target instanceof HTMLDialogElement && target.open) {
+      target.close();
+      return;
+    }
     if (!(target instanceof Element)) return;
     const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
     const projectLink = target.closest("[data-project-link]");
@@ -554,6 +720,22 @@ export const DASHBOARD_JS = `
           if (input instanceof HTMLInputElement) input.value = "";
           buildSwitcher("");
         }
+        if (dlg.id === "add-file") {
+          const group = opener.getAttribute("data-file-group") || "requirement";
+          const preset = opener.getAttribute("data-file-name") || "";
+          const heading = dlg.querySelector("h2");
+          if (heading) heading.textContent = preset ? "New version" : "Add file";
+          const groupInput = dlg.querySelector("[name=group]");
+          if (groupInput) groupInput.value = group;
+          const nameInput = dlg.querySelector("[name=name]");
+          if (nameInput instanceof HTMLInputElement) nameInput.value = preset;
+          const noteInput = dlg.querySelector("[name=note]");
+          if (noteInput instanceof HTMLInputElement) noteInput.value = "";
+          const fileInput = dlg.querySelector("[name=file]");
+          if (fileInput instanceof HTMLInputElement) fileInput.value = "";
+          const label = dlg.querySelector("[data-file-label]");
+          if (label) label.textContent = preset ? "Drop a new version of " + preset + "." : "Drop a file here, or choose one.";
+        }
         dlg.showModal();
         const focus = dlg.querySelector("input, button");
         if (focus instanceof HTMLElement) focus.focus();
@@ -570,8 +752,98 @@ export const DASHBOARD_JS = `
 
     const pen = target.closest("[data-inline-open]");
     if (pen) {
-      const form = pen.closest("[data-inline-edit]");
+      const form = editForm(pen);
       if (form) openEdit(form);
+      return;
+    }
+    const clampBtn = target.closest("[data-clamp-toggle]");
+    if (clampBtn) {
+      const box = clampBtn.parentElement && clampBtn.parentElement.querySelector("[data-clamp]");
+      if (box) {
+        const open = box.classList.toggle("is-open");
+        clampBtn.textContent = open ? "Show less" : "Show more";
+      }
+      return;
+    }
+    const compareToggle = target.closest("[data-compare-toggle]");
+    if (compareToggle) {
+      const form = compareToggle.closest("form");
+      const field = form && form.querySelector(".diff-field");
+      const open = compareToggle.getAttribute("aria-expanded") === "true";
+      if (open && form instanceof HTMLFormElement) {
+        const diff = form.querySelector("[name=diff]");
+        if (diff) diff.value = "";
+        compareToggle.setAttribute("aria-expanded", "false");
+        if (field) field.hidden = true;
+        if (form.requestSubmit) form.requestSubmit();
+        else form.submit();
+      } else if (field) {
+        field.hidden = false;
+        compareToggle.setAttribute("aria-expanded", "true");
+        const select = field.querySelector("select");
+        if (select instanceof HTMLElement) select.focus();
+      }
+      return;
+    }
+    const lbOpen = target.closest("[data-lb]");
+    if (lbOpen) {
+      event.preventDefault();
+      openLightbox(lbOpen, null);
+      return;
+    }
+    const lbName = target.closest("[data-lb-open]");
+    if (lbName) {
+      const id = lbName.getAttribute("data-lb-open");
+      const el = id && document.querySelector('[data-lb][data-id="' + id + '"]');
+      if (el) openLightbox(el, null);
+      return;
+    }
+    const jump = target.closest("[data-lb-jump]");
+    if (jump) {
+      const id = jump.getAttribute("data-lb-jump");
+      const el = id && document.querySelector('[data-lb][data-id="' + id + '"]');
+      if (el) openLightbox(el, { mode: "single", src: jump.getAttribute("data-src") || "", version: jump.getAttribute("data-version") || "" });
+      const pop = jump.closest("[popover]");
+      if (pop && pop.hidePopover) pop.hidePopover();
+      return;
+    }
+    const cmp = target.closest("[data-open-compare]");
+    if (cmp) {
+      const pop = cmp.closest("[popover]");
+      const id = cmp.getAttribute("data-id");
+      const el = id && document.querySelector('[data-lb][data-id="' + id + '"]');
+      const left = pop && pop.querySelector("[data-cmp-left]");
+      const right = pop && pop.querySelector("[data-cmp-right]");
+      if (el) openLightbox(el, { mode: "split", left: left ? left.value : "", right: right ? right.value : "" });
+      if (pop && pop.hidePopover) pop.hidePopover();
+      return;
+    }
+    const modeBtn = target.closest("[data-lb-mode]");
+    if (modeBtn) {
+      lbMode = modeBtn.getAttribute("data-lb-mode") || "split";
+      lbSrc = "";
+      lbVersion = "";
+      renderLightbox();
+      return;
+    }
+    if (target.closest("[data-lb-prev]")) {
+      lbIndex = Math.max(0, lbIndex - 1);
+      lbMode = "single";
+      lbSrc = "";
+      lbVersion = "";
+      lbLeft = "";
+      lbRight = "";
+      renderLightbox();
+      return;
+    }
+    if (target.closest("[data-lb-next]")) {
+      lbIndex += 1;
+      lbMode = "single";
+      lbSrc = "";
+      lbVersion = "";
+      lbLeft = "";
+      lbRight = "";
+      renderLightbox();
       return;
     }
     const cancelEdit = target.closest("[data-inline-cancel]");
@@ -615,7 +887,7 @@ export const DASHBOARD_JS = `
       if (form) form.requestSubmit();
       return;
     }
-    if (event.target instanceof HTMLTextAreaElement && event.target.closest(".feedback-dock") && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (event.target instanceof HTMLTextAreaElement && event.key === "Enter" && (event.metaKey || event.ctrlKey) && (event.target.closest(".feedback-dock") || event.target.closest("[data-inline-kind='markdown']"))) {
       event.preventDefault();
       const form = event.target.form;
       if (form) form.requestSubmit();
@@ -704,6 +976,7 @@ export const DASHBOARD_JS = `
     }
   });
   if (page === "task") applyTaskTab(document.querySelector("main .task"), true);
+  requestAnimationFrame(() => measureClamps(document));
   if (!history.state) history.replaceState({ hub: 1 }, "");
 
   document.addEventListener("submit", (event) => {
@@ -713,12 +986,22 @@ export const DASHBOARD_JS = `
       event.preventDefault();
       const field = form.querySelector("input, select, textarea");
       const msg = form.querySelector(".ie-msg");
+      const markdown = form.getAttribute("data-inline-kind") === "markdown";
       form.classList.add("is-saving");
       if (msg) msg.textContent = "Saving…";
       fetch(form.action, { method: "POST", body: new FormData(form), headers: { accept: "application/json" } })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || "Could not save");
+          if (markdown) {
+            const next = new URL(location.href);
+            next.searchParams.set("tab", "overview");
+            next.searchParams.delete("rv");
+            next.searchParams.delete("diff");
+            next.searchParams.delete("fragment");
+            location.assign(next.pathname + "?" + next.searchParams.toString());
+            return;
+          }
           const value = field && "value" in field ? String(field.value) : "";
           if (field) field.setAttribute("data-original", value);
           paintValue(form, value.trim());
@@ -743,6 +1026,85 @@ export const DASHBOARD_JS = `
         form.submit();
       }
     }, { once: true });
+  });
+
+  document.addEventListener("change", (event) => {
+    const node = event.target;
+    if (node instanceof HTMLInputElement && node.type === "file" && node.files && node.files[0]) {
+      const dlg = node.closest("dialog");
+      const name = dlg && dlg.querySelector("[name=name]");
+      if (name instanceof HTMLInputElement && !name.value) name.value = node.files[0].name;
+    }
+    if (!(node instanceof HTMLSelectElement)) return;
+    if (node.id === "lb-left" || node.id === "lb-right") {
+      const left = document.getElementById("lb-left");
+      const right = document.getElementById("lb-right");
+      if (left instanceof HTMLSelectElement) lbLeft = left.value;
+      if (right instanceof HTMLSelectElement) lbRight = right.value;
+      if (lbMode === "single") lbMode = "split";
+      lbSrc = "";
+      lbVersion = "";
+      renderLightbox();
+      return;
+    }
+    const pick = node.closest(".request-pick");
+    if (pick instanceof HTMLFormElement) {
+      if (pick.requestSubmit) pick.requestSubmit();
+      else pick.submit();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    const bar = event.target instanceof Element ? event.target.closest("[data-split-bar]") : null;
+    const stage = bar && bar.closest("[data-split]");
+    if (!stage) return;
+    splitDrag = stage;
+    if (stage.setPointerCapture) stage.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (!splitDrag) return;
+    const rect = splitDrag.getBoundingClientRect();
+    if (!rect.width) return;
+    lbPos = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100));
+    layoutSplit(splitDrag);
+  });
+  document.addEventListener("pointerup", () => { splitDrag = null; });
+  document.addEventListener("pointercancel", () => { splitDrag = null; });
+  document.addEventListener("keydown", (event) => {
+    const stage = document.querySelector("[data-split]");
+    if (!stage || (document.activeElement !== stage && !stage.contains(document.activeElement))) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    if (event.key === "Home") lbPos = 0;
+    else if (event.key === "End") lbPos = 100;
+    else lbPos = Math.min(100, Math.max(0, lbPos + (event.key === "ArrowRight" ? 4 : -4)));
+    layoutSplit(stage);
+  });
+  document.addEventListener("dragover", (event) => {
+    const zone = event.target instanceof Element ? event.target.closest("[data-dropzone]") : null;
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add("is-over");
+  });
+  document.addEventListener("dragleave", (event) => {
+    const zone = event.target instanceof Element ? event.target.closest("[data-dropzone]") : null;
+    if (zone) zone.classList.remove("is-over");
+  });
+  document.addEventListener("drop", (event) => {
+    const zone = event.target instanceof Element ? event.target.closest("[data-dropzone]") : null;
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove("is-over");
+    const input = zone.querySelector("input[type=file]");
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (input instanceof HTMLInputElement && files && files.length) {
+      input.files = files;
+      const dlg = zone.closest("dialog");
+      const name = dlg && dlg.querySelector("[name=name]");
+      if (name instanceof HTMLInputElement && !name.value) name.value = files[0].name;
+      const label = zone.querySelector("[data-file-label]");
+      if (label) label.textContent = files[0].name;
+    }
   });
 
   if (page === "board") {

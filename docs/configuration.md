@@ -128,7 +128,7 @@ pnpm run deploy:staging
 |---|---|---|---|
 | `ENVIRONMENT` | `production` | The test suite sets `test`. Any other value uses the live Access certificate endpoint. | Selects production behaviour. `staging` is set on the staging Worker. |
 | `UI_HOST` | `status.example.com` | Required. Routing compares the request hostname to this value. | Hostname of the Kanban UI. Must match the UI custom domain. |
-| `MCP_HOST` | `mcp.example.com` | Required. Routing compares the request hostname to this value. | Hostname of the MCP server. Must match the MCP custom domain. Only `/mcp` is served. |
+| `MCP_HOST` | `mcp.example.com` | Required. Routing compares the request hostname to this value. | Hostname of the MCP server. Must match the MCP custom domain. `/mcp` and `POST /attachment-uploads/:token` are served. |
 | `ORG_NAME` | `Status Hub` | `Status Hub` | Text in the UI header. A blank value uses `Status Hub`. |
 | `MCP_SERVER_NAME` | `status-hub` | `status-hub` | Name advertised to MCP clients. A blank value uses `status-hub`. |
 | `AUTH_MODE` | `access` | `access`. A blank value is the same as `access`. | `access` verifies the Cloudflare Access JWT. `token` serves `/login`. Any other value, including `magic-link`, denies the UI. |
@@ -147,6 +147,8 @@ pnpm run deploy:staging
 | `STALE_WORK_END_HOUR` | unset | `settings.stale_work_end_hour`, seeded as `22` | Optional alert override. Hour is exclusive. |
 | `BLOCKED_HOURS` | unset | `settings.blocked_hours`, seeded as `2` | Optional alert override. |
 | `TZ_OFFSET_MINUTES` | unset | `settings.tz_offset_minutes`, seeded as `0` | Optional timezone override, in minutes east of UTC. `0` is UTC. A set value of `0` still overrides the table. |
+| `ATTACHMENT_MAX_BYTES` | unset | `10485760` (10 MiB). A blank or non-numeric value uses that default. | Max bytes for one attachment upload. Values above `26214400` (25 MiB) are capped. |
+| `ATTACHMENT_ALLOWED_MIME` | unset | png, jpeg, gif, webp, pdf, `text/plain`, `text/markdown`, `text/csv`, `application/json`, `video/mp4`, `video/webm` | Comma-separated MIME allowlist. A blank value uses the default list. Images must match their magic bytes. |
 
 Lists are comma-separated. Whitespace around each item is ignored. Empty items are dropped. A repeated id in `OWNER_IDS` or `APPROVER_IDS` is kept once, at its first position. In `UI_MEMBER_EMAILS` and `LEADERSHIP_AUTHORS`, emails are lowercased, and a repeated email keeps the last value. An item without `=` is ignored.
 
@@ -232,7 +234,7 @@ UPDATE ui_sessions SET revoked_at = 1710000000000 WHERE email = 'you@example.com
 | `UI_MEMBER_EMAILS` | `you@example.com=admin` |
 | `LEADERSHIP_AUTHORS` | `you@example.com=Owner` |
 
-The alert variables are unset in staging as well, so staging uses its own `settings` table after migrations. `AUTH_SESSION_SECRET` is not a var. Set it with `wrangler secret put AUTH_SESSION_SECRET --env staging` when staging uses `AUTH_MODE=token`. Custom domains, `workers_dev: false`, `preview_urls: false`, and the `*/5 * * * *` cron are set again on the staging env.
+The alert variables are unset in staging as well, so staging uses its own `settings` table after migrations. `AUTH_SESSION_SECRET` is not a var. Set it with `wrangler secret put AUTH_SESSION_SECRET --env staging` when staging uses `AUTH_MODE=token`. Custom domains, `workers_dev: false`, `preview_urls: false`, and the `*/5 * * * *` cron are set again on the staging env. Staging does not inherit an R2 binding. Add `r2_buckets` under `env.staging` with its own bucket (for example `status-hub-attachments-staging`) when that environment should store files.
 
 ```bash
 # Add the production flags from the non-interactive example (--org, --timezone, hosts, admin).
@@ -263,6 +265,7 @@ These are Wrangler settings, not Worker env vars.
 | `d1_databases[0].database_name` | `status-hub` | Setup reuses or creates this name. Override with `--database-name`. |
 | `d1_databases[0].database_id` | `00000000-0000-0000-0000-000000000000` | Placeholder in git. Setup writes the real id into `wrangler.local.jsonc`. |
 | `d1_databases[0].migrations_dir` | `migrations` | Leave it. |
+| `r2_buckets` | commented out | Optional. Binding name `ATTACHMENTS`. Uncomment after `wrangler r2 bucket create status-hub-attachments`. Without this binding, file uploads are hidden and `add_attachment` returns an error. The bucket is not public. |
 | `triggers.crons` | `*/5 * * * *` | Alert cron. Running it twice does not duplicate an open alert. |
 | `observability` | logs, invocation logs, and traces enabled | Worker logs and traces for this script. |
 | Staging `database_name` | `status-hub-staging` | Created or reused when setup runs with `--staging`. |
@@ -301,8 +304,10 @@ UPDATE settings SET value = '30' WHERE key = 'not_started_minutes';
 | `0006_task_reviewer.sql` | `reviewer_id`. |
 | `0007_configurable_roles.sql` | Drops fixed requester, approver, and feedback-author checks so those lists come from env. |
 | `0008_ui_login.sql` | `ui_login_tokens` (SHA-256 of a UI login token) and `ui_sessions` (rows behind the session cookie). |
+| `0009_request_versions.sql` | `request_versions`. Each edit inserts a row. The body is never updated. |
+| `0010_attachments.sql` | `attachments`, `attachment_versions` (unique `r2_key`), `output_links`, `attachment_uploads`, and `request_version` / `output_ref` on `updates` and `feedback`. |
 
-Do not rename `0001` through `0008`. Add a new schema change as the next number, `0009` or later, and make it additive.
+Do not rename `0001` through `0010`. Add a new schema change as the next number, `0011` or later, and make it additive.
 
 ## Members and tokens
 

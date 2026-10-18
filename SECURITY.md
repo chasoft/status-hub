@@ -19,7 +19,7 @@ Two hostnames are meant to be reachable.
 | `UI_HOST` | Browsers | `AUTH_MODE=access`: Cloudflare Access in front of the hostname, then the Worker verifies `Cf-Access-Jwt-Assertion` again. `AUTH_MODE=token`: a login token checked against a SHA-256 in D1, then a signed session cookie. |
 | `MCP_HOST` | Bots | `POST /mcp` with `Authorization: Bearer <token>`. Leave this hostname off Access. `AUTH_MODE` does not apply. |
 
-`workers_dev` and `preview_urls` are false. The fetch handler returns 403 for every other hostname, including a `workers.dev` host and a preview URL. The MCP host returns 404 for every path other than `/mcp`.
+`workers_dev` and `preview_urls` are false. The fetch handler returns 403 for every other hostname, including a `workers.dev` host and a preview URL. The MCP host returns 404 for every path other than `/mcp` and `POST /attachment-uploads/:token`. That upload path uses the same bearer token as `/mcp`. The token is one-time, expires in 15 minutes, and the author must be the caller. It does not make the bucket public.
 
 An empty `ACCESS_AUD` denies every UI request when `AUTH_MODE=access`. Keep that default until the Access application exists, then set `ACCESS_AUD` to that application's AUD tag and `ACCESS_TEAM_DOMAIN` to the team domain without a scheme. `AUTH_MODE=token` does not read `ACCESS_AUD`.
 
@@ -65,7 +65,8 @@ Format: `shk_<memberId>_<secret>`.
 
 HTML responses send:
 
-- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `img-src` allows same-origin attachment thumbnails and `https:` images referenced in request markdown. Those images are thumbnails; a click opens them in a dialog. `javascript:` image URLs are not rendered.
 - The dashboard script is `/assets/dashboard.js` on the UI host. Pages do not use inline event handlers. `connect-src 'self'` allows the board poll.
 - `x-content-type-options: nosniff`
 - `referrer-policy: no-referrer`
@@ -74,6 +75,16 @@ HTML responses send:
 Form posts are accepted when `Sec-Fetch-Site` is `same-origin`. If that header is absent, a missing `Origin` is accepted, and any other `Origin` must have host `UI_HOST`. The origin value `null` is rejected. Leadership feedback stores the display name from `LEADERSHIP_AUTHORS` for the verified email. The form cannot choose a different author.
 
 The create-task form records the first active `is_admin` member as the creator. It does not trust a member id typed into the page as the caller.
+
+## Request markdown
+
+The request document is stored as text. The page renders it with a sanitizer that escapes raw HTML, so a `<script>` or an event handler is text. Links are `http` or `https` only. A `javascript:` URL is dropped and the label is kept. Rendered links use `target="_blank"` and `rel="noopener noreferrer"`. The editor preview is a same-origin POST that returns that same HTML.
+
+## Attachments
+
+File bytes live in an optional R2 bucket bound as `ATTACHMENTS`. The binding is commented out in `wrangler.jsonc`. The bucket is not a public bucket and has no public custom domain. Downloads are `GET /t/:code/attachments/:id` on `UI_HOST` after the same UI sign-in as the board. The MCP host does not serve those bytes. A download sets `Content-Disposition` (`inline` for png, jpeg, gif, and webp; `attachment` otherwise), `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`, and `Content-Security-Policy: default-src 'none'; sandbox`.
+
+Each upload inserts a new version and a new R2 key. Keys are not overwritten. The size limit defaults to 10 MiB and is capped at 25 MiB. The MIME allowlist rejects types that are not listed. Declared images must match their magic bytes. `add_attachment` with `source_url` fetches only public `http` or `https` URLs. Hosts that are loopback, `.local`, link-local, or private (including cloud metadata addresses) are rejected, and redirects are checked the same way.
 
 ## Data to keep out of git
 

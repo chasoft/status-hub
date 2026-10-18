@@ -10,7 +10,7 @@ The caller is always the member on the bearer token. Tool arguments do not selec
 POST https://<MCP_HOST>/mcp
 ```
 
-`MCP_HOST` is the MCP custom domain in [wrangler.jsonc](../wrangler.jsonc). The default placeholder is `mcp.example.com`. The UI hostname does not serve MCP. Any other hostname returns 403. Any path other than `/mcp` on the MCP hostname returns 404.
+`MCP_HOST` is the MCP custom domain in [wrangler.jsonc](../wrangler.jsonc). The default placeholder is `mcp.example.com`. The UI hostname does not serve MCP. Any other hostname returns 403. On the MCP hostname, `/mcp` and `POST /attachment-uploads/:token` are served. Any other path returns 404. The upload path finishes an `add_attachment` call that used `upload: true`. It still requires the bearer token. It is not a public object URL.
 
 The Worker strips CORS headers (`corsOptions: false` on the MCP handler). Call it from the bot's HTTP client. The `Host` header must be `MCP_HOST`, which is what you get by using that hostname in the URL. Omit `Origin`. A request with `Origin` is accepted only for `localhost`, `127.0.0.1`, and `[::1]`. Any other origin is HTTP 403.
 
@@ -22,7 +22,7 @@ Authorization: Bearer shk_<memberId>_<secret>
 
 `pnpm run setup` prints the first admin token. Mint another with `pnpm run token <member-id>` after that member exists. Details, storage, and revocation are in [Security](../SECURITY.md) and [Configuration](configuration.md).
 
-This bearer token is only for `/mcp`. UI sign-in is `AUTH_MODE` in [Configuration](configuration.md): `access` (Cloudflare Access) or `token` (a login token from `pnpm run ui-login <email>`). A UI login token starts with `shu_` and is stored as a SHA-256 in `ui_login_tokens`. It is not accepted on `/mcp`. A bot token starts with `shk_` and is not a UI login token. `magic-link` is not available, because sending a link needs an email provider.
+This bearer token is for `/mcp` and for `POST /attachment-uploads/:token`. UI sign-in is `AUTH_MODE` in [Configuration](configuration.md): `access` (Cloudflare Access) or `token` (a login token from `pnpm run ui-login <email>`). A UI login token starts with `shu_` and is stored as a SHA-256 in `ui_login_tokens`. It is not accepted on `/mcp` or on the upload path. A bot token starts with `shk_` and is not a UI login token. `magic-link` is not available, because sending a link needs an email provider.
 
 A missing or invalid token returns HTTP 401:
 
@@ -208,9 +208,11 @@ The assignee or a leader. Entering `pending_approval` is `pm` or admin only. Lea
 | `task` | yes | Task code, for example `APP-CORE-001.1`. |
 | `status` | yes | `pending_approval`, `backlog`, `assigned`, `in_progress`, `review`, `blocked`, `done`, or `cancelled`. `blocked` is rejected here. |
 | `note` | when finishing or rejecting | Up to 500 characters. Required for `done`, and required when rejecting `pending_approval` to `cancelled`. |
-| `links` | no | Up to 10 `http` or `https` URLs. The first URL containing `/pull/` followed by digits is written into `pr_url`. |
+| `links` | no | Up to 10 `http` or `https` URLs. The first URL containing `/pull/` followed by digits is written into `pr_url`. On a move to `review`, these URLs also count as output links when the task has no Output file and no output link yet. |
 | `reviewer` | when moving to `review` with no reviewer yet | Active member id. |
 | `approved_by` | when leaving `pending_approval` | Configured owner or approver id. |
+
+A move to `review` requires an Output attachment (the latest version of a file in the Output group) or an output link. A Requirement file does not satisfy this. Links on this call count. The update stores `request_version` (the latest request version, or null) and `output_ref` (`{"attachments":[{"id","name","version"}],"links":[...]}`). The reviewer check runs first.
 
 Move to `assigned` when work stops. `in_progress` is only for the time someone is actually working. See [workflow](workflow.md).
 
@@ -379,7 +381,9 @@ Any authenticated member.
 }
 ```
 
-Result fields: `task` (including `reviewer_id` and the request columns), `current_status`, `time_in_status`, `periods`, `updates`, `blockers`, `alerts`, `feedback`.
+Result fields: `task` (including `reviewer_id` and the request columns), `request` (latest version, or `version: null` when none exists), `attachments` (`requirement`, `output`, `output_links`), `attachments_configured`, `current_status`, `time_in_status`, `periods`, `updates`, `blockers`, `alerts`, `feedback`.
+
+`request` has `version`, `author_id`, `at`, `note`, and `markdown`. `attachments` lists each file's id, name, version count, latest version, MIME type, and size. `attachments_configured` is false when the R2 binding is absent. Each update and each feedback entry includes `request_version` and `output_ref` (parsed). `output_ref` is null when that row did not record one.
 
 ### get_task_timeline
 
@@ -499,6 +503,7 @@ Allocate the next task code on a feature (`APP-CORE-001.1`). Any member. The sta
 | `requested_by` | for a complete request | Configured owner id, approver id, or an active `pm`. At most 64 characters. |
 | `requested_at` | for a complete request | Epoch milliseconds UTC. |
 | `request_link` | for a complete request | `http` or `https`, at most 500 characters. |
+| `request` | no | Markdown, 1–50000 characters. Stored as request version 1 in the same batch. Bots should include who requested the work, what, why, acceptance criteria, and impacted areas. It does not change the pending-approval rule. |
 
 ```json
 {
@@ -519,7 +524,7 @@ Allocate the next task code on a feature (`APP-CORE-001.1`). Any member. The sta
 }
 ```
 
-Result fields: `code`, `status`, `pr_url`.
+Result fields: `code`, `status`, `pr_url`, `request_version` (`1` when `request` was sent, otherwise null).
 
 ### update_task
 
@@ -658,3 +663,117 @@ printf '%s' "$STATUS_HUB_TOKEN" | sha256sum
 ```
 
 `pnpm run token <member-id>` prints a ready-to-run Wrangler statement for the same hash.
+
+### set_request
+
+Store a new markdown request version. The assignee or a leader. Older versions stay. The caller is the author.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+| `markdown` | yes | 1–50000 characters after trimming. |
+| `note` | no | Change note, up to 500 characters. |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "method": "tools/call",
+  "params": {
+    "name": "set_request",
+    "arguments": {
+      "task": "APP-CORE-001.1",
+      "markdown": "## Who requested\n\nAda\n\n## What\n\nRender the columns.\n\n## Why\n\nThe board is empty.\n\n## Acceptance criteria\n\n- Columns match statuses.\n\n## Impacted areas\n\nOverview.",
+      "note": "Filled the template."
+    }
+  }
+}
+```
+
+Result fields: `task`, `version`, `author_id`, `at`, `note`, `markdown`.
+
+### get_request
+
+Read one request version. Any authenticated member. Omit `version` for the latest. `versions` lists every version without the markdown body. A task with no request returns `version: null`. A missing version number is 404.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+| `version` | no | Integer ≥ 1. |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "method": "tools/call",
+  "params": {
+    "name": "get_request",
+    "arguments": { "task": "APP-CORE-001.1", "version": 1 }
+  }
+}
+```
+
+Result fields: `task`, `version`, `latest`, `markdown`, `author_id`, `at`, `note`, `versions`.
+
+### add_attachment
+
+Create or version a Requirement or Output file. The assignee or a leader. The same task, group, and name inserts a new version and keeps the previous R2 object. Provide exactly one of `content_base64`, `source_url`, or `upload: true`.
+
+If the `ATTACHMENTS` binding is missing, the tool returns `BAD_REQUEST` with: `Attachments are not configured. Add an R2 bucket binding named ATTACHMENTS. See docs/configuration.md.`
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+| `group` | yes | `requirement` or `output`. |
+| `name` | yes | 1–200 characters. No slashes or control characters. |
+| `mime` | yes | Allowlisted type. Default list is in [configuration](configuration.md). |
+| `note` | no | Up to 500 characters. |
+| `content_base64` | one of three | Standard base64 of the file bytes. |
+| `source_url` | one of three | Public `http` or `https` URL. The Worker fetches it. Loopback, link-local, and private addresses are rejected. |
+| `upload` | one of three | `true`. Returns a one-time path. Does not store bytes yet. |
+
+`upload: true` returns `pending`, `upload_path` (`/attachment-uploads/<token>`), `method` (`POST`), `expires_at` (15 minutes), `task`, `group`, `name`, and `mime`. Finish it with `POST https://<MCP_HOST><upload_path>`, the same bearer token, and the raw bytes as the body (or multipart field `file`). The token is one-time and the author must be the caller. A missing bearer token is HTTP 401.
+
+A stored result omits the R2 key. Fields: `id`, `task`, `group`, `name`, `version`, `mime`, `bytes`, `author_id`, `at`, `note`.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "method": "tools/call",
+  "params": {
+    "name": "add_attachment",
+    "arguments": {
+      "task": "APP-CORE-001.1",
+      "group": "output",
+      "name": "board.png",
+      "mime": "image/png",
+      "content_base64": "<base64>"
+    }
+  }
+}
+```
+
+Downloads are `GET /t/<task>/attachments/<id>` on the UI host, with the same sign-in as the board. `?v=` selects an older version. The bucket is not public.
+
+### list_attachments
+
+List Requirement and Output files for a task, newest version first, plus output links. Any authenticated member. Bytes are not included.
+
+| Argument | Required | Rule |
+|---|---|---|
+| `task` | yes | Task code. |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 23,
+  "method": "tools/call",
+  "params": {
+    "name": "list_attachments",
+    "arguments": { "task": "APP-CORE-001.1" }
+  }
+}
+```
+
+Result fields: `task`, `configured`, `requirement`, `output`, `output_links`. Each file has `id`, `name`, `latest`, and `versions`. `configured` is false when R2 is not bound. The lists are still returned.
