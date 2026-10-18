@@ -4,7 +4,7 @@ import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
 import { listAttachments } from "./attachments";
 import { PREVIEW_TRUNCATED, PREVIEW_UNAVAILABLE, previewPlan } from "./preview";
-import { attachmentSummary, getRequestDocument, isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type OutputRef, type PeriodRow, type Status } from "./core";
+import { attachmentSummary, getRequestDocument, isAdmin, isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type OutputRef, type PeriodRow, type Status } from "./core";
 import { diffLines } from "./diff";
 import { featurePalette, paletteStyle } from "./feature-color";
 import { clusterByFeature, isSortKey, sortTasks, type SortDir, type SortKey } from "./groups";
@@ -44,7 +44,7 @@ const STATUS_LABEL: Record<Status, string> = {
 const BOARD_COLS: Status[] = ["pending_approval", "backlog", "assigned", "in_progress", "review", "blocked", "done"];
 const RULE_LABEL: Record<string, string> = {
   NOT_STARTED: "Not started", STALE: "Stale", BLOCKED_LONG: "Blocked too long", OVERDUE: "Overdue",
-  LEADERSHIP_FEEDBACK: "Leadership feedback",
+  LEADERSHIP_FEEDBACK: "Leadership feedback", WEBHOOK_FAILED: "Webhook failed",
 };
 const AVATAR_COLORS = ["#0e6b4f", "#1d4e89", "#6b3fa0", "#8a5a12", "#a33b32", "#0f6e6e", "#3d5a80"];
 const DONE_PREVIEW = 10;
@@ -993,7 +993,7 @@ function dueInputValue(ms: number | null | undefined, offsetMinutes: number): st
 
 /** Value with a pencil. The editor (input, check, x) replaces the value in place. */
 function inlineEdit(opts: {
-  action: string; name: string; label: string; kind: "url" | "links" | "text" | "time";
+  action: string; name: string; label: string; kind: "url" | "links" | "text" | "time" | "secret";
   value: string; display: string; editable: boolean; error?: string; draft?: string;
   inputType?: string; options?: { value: string; label: string }[];
 }): string {
@@ -1003,7 +1003,7 @@ function inlineEdit(opts: {
   const draft = opts.draft ?? opts.value;
   const control = opts.options
     ? `<select name="${esc(opts.name)}" aria-label="${esc(opts.label)}" data-original="${esc(opts.value)}">${opts.options.map((o) => `<option value="${esc(o.value)}"${o.value === draft ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
-    : `<input name="${esc(opts.name)}" type="${opts.inputType || "text"}" value="${esc(draft)}" data-original="${esc(opts.value)}" aria-label="${esc(opts.label)}">`;
+    : `<input name="${esc(opts.name)}" type="${opts.inputType || "text"}" value="${esc(draft)}" data-original="${esc(opts.value)}" aria-label="${esc(opts.label)}"${opts.kind === "secret" ? ` autocomplete="off" placeholder="New value; empty clears"` : ""}>`;
   return `<form class="inline-edit${open ? " is-editing" : ""}" method="post" action="${esc(opts.action)}" data-inline-edit data-inline-kind="${opts.kind}" novalidate>
 <span class="ie-view"${open ? " hidden" : ""}><span class="ie-value">${shown}</span><button type="button" class="ie-pen" data-inline-open aria-label="Edit ${esc(opts.label)}">${ICON_PEN}</button></span>
 <span class="ie-form"${open ? "" : " hidden"}>${control}<button type="submit" class="ie-save" aria-label="Save ${esc(opts.label)}">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel ${esc(opts.label)}">${ICON_X}</button></span>
@@ -1287,18 +1287,36 @@ export async function renderAlerts(db: D1Database, email: string, now = Date.now
 }
 
 export async function renderMembers(db: D1Database, email: string) {
+  const viewer = await memberForAccessEmail(db, email);
+  const admin = !!viewer && isAdmin(viewer);
   const { results } = await db.prepare(`SELECT m.id, m.name, m.role, m.is_admin, (m.token_hash IS NOT NULL) AS has_token,
+    m.webhook_url, m.webhook_header_name, (m.webhook_secret IS NOT NULL) AS has_secret,
+    (SELECT COUNT(*) FROM webhook_outbox o WHERE o.member_id = m.id AND o.delivered_at IS NULL AND o.failed_at IS NULL) AS wh_pending,
+    (SELECT COUNT(*) FROM webhook_outbox o WHERE o.member_id = m.id AND o.failed_at IS NOT NULL AND o.last_error != 'webhook removed') AS wh_failed,
     (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = m.id AND t.status IN ('assigned','in_progress','review','blocked')) AS open,
     (SELECT COUNT(*) FROM alerts a JOIN tasks t ON t.code = a.task_code WHERE t.assignee_id = m.id AND a.cleared_at IS NULL) AS alerts
     FROM members m WHERE m.active = 1 ORDER BY m.is_admin DESC, m.id`).all<Record<string, unknown>>();
   const chrome = await loadChrome(db, new URL("https://local/"));
-  const table = `<table><thead><tr><th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th></tr></thead><tbody>${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${esc(m.open)}</td><td>${esc(m.alerts)}</td></tr>`).join("")}</tbody></table>`;
+  const whCells = (m: Record<string, unknown>) => {
+    const action = `/members/${encodeURIComponent(String(m.id))}/webhook`;
+    const url = m.webhook_url ? String(m.webhook_url) : "";
+    const header = m.webhook_header_name ? String(m.webhook_header_name) : "";
+    const stats = url ? `${Number(m.wh_pending) || 0} pending · ${Number(m.wh_failed) || 0} failed` : "";
+    return `<td>${inlineEdit({ action, name: "webhook_url", label: `Webhook URL for ${String(m.id)}`, kind: "url", value: url, display: url ? externalAnchor(url) : "", editable: true, inputType: "url" })}</td>
+<td>${inlineEdit({ action, name: "webhook_header_name", label: `Webhook header for ${String(m.id)}`, kind: "text", value: header, display: header ? esc(header) : "", editable: true })}</td>
+<td>${inlineEdit({ action, name: "webhook_secret", label: `Webhook secret for ${String(m.id)}`, kind: "secret", value: "", display: m.has_secret ? "set" : "", editable: true, inputType: "password" })}</td>
+<td class="muted">${esc(stats)}</td>`;
+  };
+  const head = admin
+    ? `<th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th><th>Webhook URL</th><th>Header</th><th>Secret</th><th>Deliveries</th>`
+    : `<th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th><th>Webhook</th>`;
+  const table = `<table><thead><tr>${head}</tr></thead><tbody>${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${esc(m.open)}</td><td>${esc(m.alerts)}</td>${admin ? whCells(m) : `<td>${m.webhook_url ? "on" : "—"}</td>`}</tr>`).join("")}</tbody></table>`;
   const body = `<div class="sheets">${sheet("h2", "Members", table)}</div>`;
   return shell("Members", body, email, chrome, "members", false);
 }
 
 export async function renderMember(db: D1Database, id: string, email: string, now = Date.now()) {
-  const m = await db.prepare("SELECT * FROM members WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const m = await db.prepare("SELECT id, name, role FROM members WHERE id = ?").bind(id).first<Record<string, unknown>>();
   if (!m) return null;
   const [cards, ups, ns] = await db.batch([
     db.prepare(`${CARD_SQL} WHERE t.assignee_id = ? AND t.status IN ('assigned','in_progress','review','blocked') ORDER BY t.last_update_at DESC`).bind(id),

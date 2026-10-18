@@ -26,6 +26,8 @@ export interface HubConfig {
   authMode: "access" | "token";
   /** Release label shown in the sidebar, for example 1.0.123. "dev" when unset. */
   appVersion: string;
+  /** UI hostname, used for task links in webhook payloads. Empty when unset. */
+  uiHost: string;
 }
 
 export interface ConfigEnv {
@@ -43,6 +45,7 @@ export interface ConfigEnv {
   TZ_OFFSET_MINUTES?: string;
   AUTH_MODE?: string;
   APP_VERSION?: string;
+  UI_HOST?: string;
 }
 
 const DEFAULTS: HubConfig = {
@@ -54,6 +57,7 @@ const DEFAULTS: HubConfig = {
   leadershipAuthors: {},
   authMode: "access",
   appVersion: "dev",
+  uiHost: "",
 };
 
 let active: HubConfig = DEFAULTS;
@@ -120,6 +124,7 @@ export function configFromEnv(env: ConfigEnv): HubConfig {
     tzOffsetMinutes: optionalNumber(env.TZ_OFFSET_MINUTES),
     authMode: env.AUTH_MODE?.trim().toLowerCase() === "token" ? "token" : "access",
     appVersion: cleanVersion(env.APP_VERSION),
+    uiHost: env.UI_HOST?.trim() ?? "",
   };
 }
 

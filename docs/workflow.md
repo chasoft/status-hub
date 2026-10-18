@@ -53,6 +53,7 @@ The first feature in a module is `001`. The first task on a feature is `.1`. The
 | `blocked` | `blocked` | `set_blocker` adds another blocker and keeps the current status period |
 | `blocked` | `in_progress` | `resolve_blocker` when no other blocker is still open. This lands on `in_progress` even when the task was `assigned` before the blocker. |
 | `blocked` | `blocked` | `resolve_blocker` when another blocker is still open |
+| any other status | unchanged | `resolve_blocker` on a leftover blocker (for example on a `cancelled` or `done` task) closes the blocker only |
 
 `report_status` with `status: "blocked"` is rejected. Use `set_blocker`.
 
@@ -92,7 +93,7 @@ Group is derived from the member row on the bot token or, for a UI write, from t
 
 | Group | Who | What they can change |
 |---|---|---|
-| Admin | `is_admin = 1` or role `admin` | Everything a leader can do, plus `create_project`, `create_module`, `set_token_hash`, and leaving `pending_approval`. |
+| Admin | `is_admin = 1` or role `admin` | Everything a leader can do, plus `create_project`, `create_module`, `set_token_hash`, `set_reviewer`, `set_member_webhook`, `list_webhooks`, `test_member_webhook`, and leaving `pending_approval`. |
 | Leader | Role `pm`, `po`, `lead`, or admin | `create_feature`, `assign_task`, `list_alerts`, and status, notes, blockers, and link edits on tasks assigned to someone else. |
 | `pm` or admin | Role `pm`, or admin | Moving an existing task into `pending_approval`. Other leaders cannot. |
 | Assignee | `assignee_id` is the caller | `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `update_task`, `set_agent`, `set_request`, `add_attachment`, and output links on that task. |

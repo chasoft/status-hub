@@ -142,6 +142,7 @@ pnpm run deploy:staging
 | `UI_MEMBER_EMAILS` | `you@example.com=admin` | No explicit map. The email's local-part is used when it is an active member id. | Comma-separated `email=memberId` pairs for UI sessions. |
 | `LEADERSHIP_AUTHORS` | `you@example.com=Owner` | Nobody can post leadership feedback. | Comma-separated `email=Display Name` pairs. The display name is what gets stored. A note from one of these authors opens one `LEADERSHIP_FEEDBACK` alert on that task. |
 | `CURSOR_API_KEY` | not set in `wrangler.jsonc` | The task page shows the status stored by `set_agent`. | Optional Worker secret. Set with `wrangler secret put CURSOR_API_KEY`. Do not commit it. When set, the task page calls `GET https://api.cursor.com/v0/agents/{id}` for a link shaped `https://cursor.com/agents/bc-…`. The key is sent as Basic auth (username is the key, password empty) and is never written into the HTML. A failed or slow lookup is cached for 30 seconds and the page falls back to the stored status. The request times out after 6 seconds and reads at most 64 KB. |
+| `WEBHOOK_SECRET_KEY` | not set in `wrangler.jsonc` | Member webhook secrets are stored as-is in D1 (still never returned by any tool or page). | Optional Worker secret. Set with `wrangler secret put WEBHOOK_SECRET_KEY`. When set, a webhook secret saved afterwards is AES-GCM encrypted in D1. Secrets saved before the key was set keep working; save them again to encrypt them. Removing or changing the key makes encrypted secrets unreadable: those deliveries fail until the secret is saved again. See [Webhooks](#webhooks). |
 | `NOT_STARTED_MINUTES` | unset | `settings.not_started_minutes`, seeded as `15` | Optional alert override. |
 | `STALE_HOURS` | unset | `settings.stale_hours`, seeded as `4` | Optional alert override. |
 | `STALE_WORK_START_HOUR` | unset | `settings.stale_work_start_hour`, seeded as `8` | Optional alert override. Hour is inclusive, in the configured timezone. |
@@ -310,8 +311,9 @@ UPDATE settings SET value = '30' WHERE key = 'not_started_minutes';
 | `0010_attachments.sql` | `attachments`, `attachment_versions` (unique `r2_key`), `output_links`, `attachment_uploads`, and `request_version` / `output_ref` on `updates` and `feedback`. |
 | `0011_leadership_feedback_alert.sql` | Rebuilds `alerts` so `rule` may be `LEADERSHIP_FEEDBACK`. Existing rows, the open-alert unique index, and the task foreign key are kept. |
 | `0012_task_agent.sql` | Nullable `agent_url`, `agent_status`, and `agent_updated_at` on `tasks`. |
+| `0013_member_webhooks.sql` | Nullable `webhook_url`, `webhook_header_name`, and `webhook_secret` on `members`; the `webhook_outbox` table; rebuilds `alerts` (same way as `0011`) so `rule` may be `WEBHOOK_FAILED`. |
 
-Do not rename `0001` through `0012`. Add a new schema change as the next number, `0013` or later, and make it additive.
+Do not rename `0001` through `0013`. Add a new schema change as the next number, `0014` or later, and make it additive.
 
 ## Members and tokens
 
@@ -329,3 +331,56 @@ pnpm run token dev1
 Revoke from an admin bot with `set_token_hash` and `"sha256": null`, or set `token_hash` to `NULL` in SQL. Never send the raw token to `set_token_hash`.
 
 A bot token is not a UI login token. Bot tokens start with `shk_` and live in `members.token_hash`. UI login tokens start with `shu_` and live in `ui_login_tokens`. Mint those with `pnpm run ui-login <email>`, described under [UI authentication](#ui-authentication).
+
+## Webhooks
+
+Bots should not poll. Instead, an admin can register one outbound webhook per member, and Status Hub POSTs to it when something on that member's task needs attention. This is how a leadership note, an assignment, or a resolved blocker wakes the bot that owns the task.
+
+### Events
+
+Each event goes to the task's **assignee**. An action the assignee took themselves is not sent back to them.
+
+| `type` | When |
+|---|---|
+| `feedback.added` | A leadership author posts feedback on the task (any status, including `done`). |
+| `task.assigned` | The member becomes the assignee of an actionable task (`assign_task` on an `assigned`, `in_progress`, `review`, or `blocked` task, `create_task` with `status: "assigned"`), or their task moves from `backlog` or `pending_approval` to `assigned`. |
+| `blocker.resolved` | Someone else resolves a blocker on the member's `blocked` task. |
+| `webhook.test` | An admin calls `test_member_webhook`. |
+
+### Request
+
+`POST <webhook_url>` with `content-type: application/json`, `user-agent: status-hub-webhook/1`, `x-status-hub-event: <type>`, `x-status-hub-delivery: <id>`, and, when configured, `<header_name>: <secret>`. Redirects are not followed (a redirect counts as a failed attempt), so the secret header never reaches another URL.
+
+```json
+{
+  "type": "feedback.added",
+  "id": "9b0c…",
+  "at": "2026-10-18T10:08:00.000Z",
+  "member": "dev1",
+  "task": { "code": "PRJ-CORE-001.3", "title": "Fix login", "status": "review", "url": "https://status.example.com/t/PRJ-CORE-001.3" },
+  "text": "Leadership feedback from Owner on PRJ-CORE-001.3 \"Fix login\": Links should open in a new tab",
+  "feedback": { "author": "Owner", "note": "Links should open in a new tab", "at": 1792312080000, "request_version": 2 }
+}
+```
+
+`text` is a one-line summary a bot can use as its prompt. `task.url` uses `UI_HOST`. `task.assigned` adds `assigned_by`. `blocker.resolved` adds `blocker` (`id`, `kind`, `waiting_on`, `detail`, `resolution`, `resolved_by`) and `remaining_blockers`. Use `id` to ignore a duplicate: delivery is at least once.
+
+### Delivery and retries
+
+The event is written to `webhook_outbox` in the same request, then sent right after the response through `ctx.waitUntil` with a 5 second timeout. Any 2xx is success. Anything else (non-2xx, timeout, network error, redirect, unreadable secret) is retried by the five-minute cron, up to 5 attempts in total. After the fifth failure the row is marked failed and the task gets a `WEBHOOK_FAILED` alert ("Webhook failed" on the board and the Alerts page). The alert clears when a later delivery for that task succeeds or an admin saves that member's webhook again. Logs record the delivery id, member, event, attempt, and HTTP status, never the URL or the secret.
+
+### Register a webhook
+
+Admin only. The URL must be `https`, without user or password. The header name must be a valid HTTP header name and cannot be `Host`, `Content-Type`, `Content-Length`, `Connection`, `Transfer-Encoding`, `Cookie`, `User-Agent`, or an `x-status-hub-*` header. The secret is write-only: no tool, API, or page returns it (the Members page shows `set`).
+
+From an admin bot over MCP:
+
+```json
+{ "name": "set_member_webhook", "arguments": { "member": "dev1", "url": "https://bots.example.com/hooks/abc", "header_name": "X-Api-Key", "secret": "<sender key>" } }
+{ "name": "test_member_webhook", "arguments": { "member": "dev1" } }
+{ "name": "list_webhooks", "arguments": {} }
+```
+
+Omitted `header_name` or `secret` keeps the stored value; an empty string clears it. `url: ""` (or `null`) removes the webhook and its header and secret; queued events for that member are dropped without an alert.
+
+From the UI: open **Members**. Admins see Webhook URL, Header, and Secret columns. Click the pencil, enter the value, and save. Save an empty value to clear it. The secret field never shows the stored value.
