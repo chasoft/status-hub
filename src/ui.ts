@@ -163,6 +163,7 @@ kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:va
 .proj-code{font:12px ui-monospace,monospace;width:42px;flex:none}
 .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .proj-open{color:var(--mut);font-size:12px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 main{flex:1;min-width:0;min-height:0}
 .page-scroll{overflow:auto;padding:16px 18px 32px}
 .board-main{display:flex;flex-direction:column;overflow:hidden}
@@ -672,10 +673,10 @@ function shell(title: string, main: string, email: string, chrome: Chrome, page:
   const allOn = page === "board" && !f.project;
   const projects = `<div class="proj-nav" role="group" aria-label="Projects">
 <p class="nav-label">Projects</p>
-<a class="proj${allOn ? " is-current" : ""}" href="${esc(boardHref({ ...f, project: "" }, ""))}" data-project-link="" data-nav-project="*"${allOn ? ' aria-current="page"' : ""}><span class="proj-code">All</span><span class="proj-name">All projects</span><span class="proj-open" data-open>${openTotal}</span><span class="proj-alert${alertTotalN ? " is-on" : ""}" data-alerts>${alertTotalN}</span></a>
+<a class="proj${allOn ? " is-current" : ""}" href="${esc(boardHref({ ...f, project: "" }, ""))}" data-project-link="" data-nav-project="*"${allOn ? ' aria-current="page"' : ""}><span class="proj-code">All</span><span class="proj-name">All projects</span>${countBadge("proj-open", "data-open", openTotal, "task")}${countBadge(`proj-alert${alertTotalN ? " is-on" : ""}`, "data-alerts", alertTotalN, "alert")}</a>
 ${chrome.projects.map((p) => {
     const on = p.code === f.project;
-    return `<a class="proj${on ? " is-current" : ""}" href="${esc(boardHref(f, p.code))}" data-project-link="${esc(p.code)}" data-nav-project="${esc(p.code)}"${on ? ' aria-current="page"' : ""}><span class="proj-code">${esc(p.code)}</span><span class="proj-name">${esc(p.name)}</span><span class="proj-open" data-open>${p.open_n}</span><span class="proj-alert${p.alert_n ? " is-on" : ""}" data-alerts>${p.alert_n}</span></a>`;
+    return `<a class="proj${on ? " is-current" : ""}" href="${esc(boardHref(f, p.code))}" data-project-link="${esc(p.code)}" data-nav-project="${esc(p.code)}"${on ? ' aria-current="page"' : ""}><span class="proj-code">${esc(p.code)}</span><span class="proj-name">${esc(p.name)}</span>${countBadge("proj-open", "data-open", p.open_n, "task")}${countBadge(`proj-alert${p.alert_n ? " is-on" : ""}`, "data-alerts", p.alert_n, "alert")}</a>`;
   }).join("")}
 </div>`;
   const memberOpts = [`<option value="">All members</option>`, ...chrome.members.map((m) => `<option value="${esc(m.id)}"${m.id === f.member ? " selected" : ""}>${esc(m.name)}</option>`)].join("");
@@ -730,20 +731,33 @@ function boardSearch(f: Filters): string {
   return withQuery("", [["project", f.project], ["member", f.member], ["status", f.status], ["q", f.q]]).replace(/^\?/, "");
 }
 
-function groupMarkup(id: string, featureCode: string, featureTitle: string, count: number, inner: string, tag: "details" | "tbody"): string {
+/** "1 open task", "3 open alerts": the tooltip and screen-reader text of a sidebar count. */
+export function openCountLabel(n: number, noun: "task" | "alert"): string {
+  return `${n} open ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function countBadge(cls: string, attr: string, n: number, noun: "task" | "alert"): string {
+  const label = openCountLabel(n, noun);
+  return `<span class="${cls}" ${attr} data-noun="${noun}" title="${esc(label)}"><span data-n aria-hidden="true">${n}</span><span class="sr-only" data-label>${esc(label)}</span></span>`;
+}
+
+/** Kanban columns whose feature groups start collapsed until the user opens one. */
+export const COLLAPSED_GROUP_STATUSES: readonly string[] = ["done"];
+
+function groupMarkup(id: string, featureCode: string, featureTitle: string, count: number, inner: string, tag: "details" | "tbody", open = true): string {
   const tint = paletteStyle(featurePalette(featureCode));
   const head = `<span class="chev" aria-hidden="true"></span><span class="code">${esc(featureCode)}</span><span class="gtitle">${esc(featureTitle)}</span><span class="gcount">${count}</span>`;
   if (tag === "tbody") {
     return `<tbody class="fg" data-group="${esc(id)}" data-feature="${esc(featureCode)}" style="${tint}"><tr class="group-head"><td colspan="${TABLE_COLUMNS.length}"><button type="button" class="g-toggle" data-group-toggle aria-expanded="true">${head}</button></td></tr>${inner}</tbody>`;
   }
-  return `<details class="group" data-group="${esc(id)}" data-feature="${esc(featureCode)}" open style="${tint}"><summary>${head}</summary>${inner}</details>`;
+  return `<details class="group" data-group="${esc(id)}" data-feature="${esc(featureCode)}"${open ? " open" : ""} style="${tint}"><summary>${head}</summary>${inner}</details>`;
 }
 
 function cellBody(rows: CardRow[], status: string, now: number, tz: number): string {
   return clusterByFeature(rows, 2).map((item) => {
     if (item.kind === "task") return card(item.task, now, tz);
     const id = `board:${status}:${item.feature_code}`;
-    return groupMarkup(id, item.feature_code, item.feature_title, item.tasks.length, item.tasks.map((t) => card(t, now, tz)).join(""), "details");
+    return groupMarkup(id, item.feature_code, item.feature_title, item.tasks.length, item.tasks.map((t) => card(t, now, tz)).join(""), "details", !COLLAPSED_GROUP_STATUSES.includes(status));
   }).join("");
 }
 

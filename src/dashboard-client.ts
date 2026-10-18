@@ -177,6 +177,20 @@ export const DASHBOARD_JS = `
     saveLanes(map);
   }
 
+  // Sidebar counts: keep the number, its tooltip and its screen-reader text in step.
+  function openCountLabel(n, noun) {
+    return n + " open " + noun + (n === 1 ? "" : "s");
+  }
+  function setNavCount(el, n) {
+    const label = openCountLabel(n, el.getAttribute("data-noun") || "task");
+    const num = el.querySelector("[data-n]");
+    if (num) num.textContent = String(n);
+    else el.textContent = String(n);
+    const sr = el.querySelector("[data-label]");
+    if (sr) sr.textContent = label;
+    el.setAttribute("title", label);
+  }
+
   let applyingGroups = false;
   function groupMap() {
     try {
@@ -189,16 +203,32 @@ export const DASHBOARD_JS = `
   function saveGroups(map) {
     storageSet(GROUP_KEY, JSON.stringify(map));
   }
+  // Done-column groups start collapsed; the map stores only choices that differ
+  // from a group's default (1 = collapsed, 0 = opened).
+  function groupDefaultCollapsed(id) {
+    return String(id || "").indexOf("board:done:") === 0;
+  }
+  function groupCollapsed(map, id) {
+    if (!id) return false;
+    if (Object.prototype.hasOwnProperty.call(map, id)) return !!map[id];
+    return groupDefaultCollapsed(id);
+  }
+  function storeGroup(map, id, collapsed) {
+    if (collapsed === groupDefaultCollapsed(id)) delete map[id];
+    else map[id] = collapsed ? 1 : 0;
+  }
   function applyGroups() {
     applyingGroups = true;
     const map = groupMap();
     document.querySelectorAll("details.group[data-group]").forEach((el) => {
       const id = el.getAttribute("data-group");
-      if (id && map[id]) el.open = false;
+      if (!id) return;
+      const open = !groupCollapsed(map, id);
+      if (el.open !== open) el.open = open;
     });
     document.querySelectorAll("tbody.fg[data-group]").forEach((el) => {
       const id = el.getAttribute("data-group");
-      const collapsed = !!(id && map[id]);
+      const collapsed = groupCollapsed(map, id);
       el.classList.toggle("is-collapsed", collapsed);
       const btn = el.querySelector("[data-group-toggle]");
       if (btn) btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
@@ -211,8 +241,7 @@ export const DASHBOARD_JS = `
     if (!id) return;
     const map = groupMap();
     const collapsed = node.classList.contains("fg") ? node.classList.contains("is-collapsed") : !node.open;
-    if (collapsed) map[id] = 1;
-    else delete map[id];
+    storeGroup(map, id, collapsed);
     saveGroups(map);
   }
   function setGroups(open) {
@@ -222,8 +251,7 @@ export const DASHBOARD_JS = `
       el.open = open;
       const id = el.getAttribute("data-group");
       if (!id) return;
-      if (open) delete map[id];
-      else map[id] = 1;
+      storeGroup(map, id, !open);
     });
     document.querySelectorAll("tbody.fg[data-group]").forEach((el) => {
       el.classList.toggle("is-collapsed", !open);
@@ -231,8 +259,7 @@ export const DASHBOARD_JS = `
       if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
       const id = el.getAttribute("data-group");
       if (!id) return;
-      if (open) delete map[id];
-      else map[id] = 1;
+      storeGroup(map, id, !open);
     });
     applyingGroups = false;
     saveGroups(map);
@@ -360,7 +387,7 @@ export const DASHBOARD_JS = `
       summary.append(chev, codeEl, titleEl, countEl);
       details.appendChild(summary);
       list.forEach((item) => details.appendChild(item));
-      const collapsed = remembered[id] || openNow[id] === false;
+      const collapsed = Object.prototype.hasOwnProperty.call(openNow, id) ? !openNow[id] : groupCollapsed(remembered, id);
       details.open = !collapsed;
       cell.appendChild(details);
     });
@@ -439,20 +466,20 @@ export const DASHBOARD_JS = `
       const link = document.querySelector("[data-nav-project='" + CSS.escape(project.code) + "']");
       if (!link) continue;
       const open = link.querySelector("[data-open]");
-      if (open) open.textContent = String(project.open);
+      if (open) setNavCount(open, Number(project.open) || 0);
       const alert = link.querySelector("[data-alerts]");
       if (alert) {
-        alert.textContent = String(project.alerts);
+        setNavCount(alert, Number(project.alerts) || 0);
         alert.classList.toggle("is-on", project.alerts > 0);
       }
     }
     const all = document.querySelector("[data-nav-project='*']");
     if (all) {
       const open = all.querySelector("[data-open]");
-      if (open) open.textContent = String(openSum);
+      if (open) setNavCount(open, openSum);
       const alert = all.querySelector("[data-alerts]");
       if (alert) {
-        alert.textContent = String(alertSum);
+        setNavCount(alert, alertSum);
         alert.classList.toggle("is-on", alertSum > 0);
       }
     }
