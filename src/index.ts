@@ -8,6 +8,10 @@ import {
   attachmentPolicy, contentDisposition, finishAttachmentUpload, getAttachmentObject, isImageMime, readCapped,
   addAttachmentBytes,
 } from "./attachments";
+import { diffLines } from "./diff";
+import {
+  PREVIEW_UNAVAILABLE, previewPlan, previewResponseHeaders, readCappedPreview, textPreviewKind,
+} from "./preview";
 import { configFromEnv, useHubConfig, type ConfigEnv } from "./config";
 import { addLeadershipFeedback, addOutputLink, AppError, assignTask, createTaskFromUi, loadSettings, runChecks, setDueAt, setFeaturePriority, setRequestDocument, setReviewer, updateTask, type Status } from "./core";
 import { DASHBOARD_JS } from "./dashboard-client";
@@ -28,7 +32,7 @@ export interface Env extends AuthEnv, ConfigEnv {
 }
 
 const SEC_HEADERS = {
-  "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; media-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
 };
@@ -258,15 +262,23 @@ async function handleUpload(req: Request, env: Env, token: string, email?: strin
   }
 }
 
+function versionParam(raw: string | null): number | null | Response {
+  if (raw == null || raw === "") return null;
+  const version = Number(raw);
+  if (!Number.isInteger(version)) return text(400, "version must be an integer");
+  return version;
+}
+
 async function downloadAttachment(env: Env, code: string, id: number, versionRaw: string | null): Promise<Response> {
-  const version = versionRaw == null || versionRaw === "" ? null : Number(versionRaw);
-  if (versionRaw && !Number.isInteger(version)) return text(400, "version must be an integer");
+  const version = versionParam(versionRaw);
+  if (version instanceof Response) return version;
   try {
     const obj = await getAttachmentObject(env.DB, env.ATTACHMENTS, code, id, version);
     const inline = isImageMime(obj.mime);
+    const htmlDoc = obj.mime === "text/html" || obj.mime === "application/xhtml+xml";
     return new Response(obj.body, {
       headers: {
-        "content-type": obj.mime,
+        "content-type": htmlDoc ? "text/plain; charset=utf-8" : obj.mime,
         "content-disposition": contentDisposition(obj.name, inline),
         "x-content-type-options": "nosniff",
         "cache-control": "private, no-store",
@@ -274,6 +286,62 @@ async function downloadAttachment(env: Env, code: string, id: number, versionRaw
         "content-security-policy": "default-src 'none'; sandbox",
       },
     });
+  } catch (e) {
+    if (e instanceof AppError) return text(e.httpStatus, e.message);
+    throw e;
+  }
+}
+
+async function previewAttachment(env: Env, code: string, id: number, url: URL): Promise<Response> {
+  const version = versionParam(url.searchParams.get("v"));
+  if (version instanceof Response) return version;
+  try {
+    const obj = await getAttachmentObject(env.DB, env.ATTACHMENTS, code, id, version);
+    const plan = previewPlan(obj.name, obj.mime);
+    const diffRaw = url.searchParams.get("diff");
+    if (diffRaw != null && diffRaw !== "") {
+      if (!textPreviewKind(plan.kind)) return text(400, "diff is only available for text files");
+      const otherVersion = versionParam(diffRaw);
+      if (otherVersion instanceof Response) return text(400, "diff must be an integer");
+      if (otherVersion == null) return text(400, "diff must be an integer");
+      const other = await getAttachmentObject(env.DB, env.ATTACHMENTS, code, id, otherVersion);
+      const otherPlan = previewPlan(other.name, other.mime);
+      if (!textPreviewKind(otherPlan.kind)) return text(400, "diff is only available for text files");
+      const before = await readCappedPreview(other.body);
+      const after = await readCappedPreview(obj.body);
+      const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+      const lines = diffLines(decode(before.bytes), decode(after.bytes));
+      return new Response(JSON.stringify({
+        kind: "diff",
+        truncated: before.truncated || after.truncated,
+        lines,
+      }), {
+        headers: previewResponseHeaders(plan, obj.name, {
+          truncated: before.truncated || after.truncated,
+          kind: "diff",
+        }),
+      });
+    }
+    if (plan.kind === "binary") {
+      await readCappedPreview(obj.body, 0);
+      return new Response(PREVIEW_UNAVAILABLE, {
+        headers: previewResponseHeaders(
+          { kind: "binary", contentType: "text/plain; charset=utf-8", inline: true, lang: "" },
+          obj.name,
+          { kind: "binary" },
+        ),
+      });
+    }
+    if (textPreviewKind(plan.kind)) {
+      const read = await readCappedPreview(obj.body);
+      const decoded = new TextDecoder().decode(read.bytes);
+      const render = url.searchParams.get("render") === "1" && plan.kind === "markdown";
+      const body = render ? renderMarkdown(decoded) : decoded;
+      return new Response(body, {
+        headers: previewResponseHeaders(plan, obj.name, { truncated: read.truncated, renderedHtml: render }),
+      });
+    }
+    return new Response(obj.body, { headers: previewResponseHeaders(plan, obj.name) });
   } catch (e) {
     if (e instanceof AppError) return text(e.httpStatus, e.message);
     throw e;
@@ -419,6 +487,9 @@ async function handleUi(req: Request, env: Env, url: URL): Promise<Response> {
   else if (path === "/done") out = await ui.renderDone(env.DB, url, email);
   else if (path === "/alerts") out = await ui.renderAlerts(env.DB, email);
   else if (path === "/members") out = await ui.renderMembers(env.DB, email);
+  else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)\/attachments\/(\d+)\/preview$/))) {
+    return previewAttachment(env, m[1], Number(m[2]), url);
+  }
   else if ((m = path.match(/^\/t\/([A-Z0-9.-]+)\/attachments\/(\d+)$/))) {
     return downloadAttachment(env, m[1], Number(m[2]), url.searchParams.get("v"));
   }

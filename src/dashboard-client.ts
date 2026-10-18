@@ -524,16 +524,30 @@ export const DASHBOARD_JS = `
 
   let lbIndex = 0;
   let lbMode = "single";
+  let lbView = "rendered";
   let lbPos = 50;
   let lbLeft = "";
   let lbRight = "";
   let lbSrc = "";
   let lbVersion = "";
+  let lbToken = 0;
   let splitDrag = null;
+  const HL_WORDS = {
+    js: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "class", "import", "export", "from", "new", "async", "await", "try", "catch", "throw", "of", "in", "this", "true", "false", "null", "undefined", "switch", "case", "break", "continue"],
+    ts: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "class", "import", "export", "from", "new", "async", "await", "try", "catch", "throw", "of", "in", "this", "true", "false", "null", "undefined", "type", "interface", "extends", "implements", "public", "private", "readonly", "enum", "as"],
+    py: ["def", "class", "return", "if", "elif", "else", "for", "while", "import", "from", "as", "try", "except", "with", "lambda", "True", "False", "None", "and", "or", "not", "in", "is", "pass", "raise", "yield", "async", "await"],
+    sh: ["if", "then", "else", "fi", "for", "while", "do", "done", "case", "esac", "in", "function", "return", "echo", "exit", "local"],
+    sql: ["select", "from", "where", "and", "or", "insert", "into", "values", "update", "set", "delete", "create", "table", "join", "left", "right", "inner", "on", "group", "by", "order", "limit", "as", "null", "not", "primary", "key"],
+    css: ["color", "background", "margin", "padding", "display", "flex", "grid", "border", "font", "width", "height", "position"],
+  };
 
   function htmlEsc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
   }
+  const NL = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  const TAB = String.fromCharCode(9);
+  const BS = String.fromCharCode(92);
   function measureClamps(root) {
     const scope = root || document;
     scope.querySelectorAll("[data-clamp]").forEach((box) => {
@@ -555,9 +569,224 @@ export const DASHBOARD_JS = `
       return [];
     }
   }
+  function versionMeta(versions, version) {
+    return versions.find((item) => String(item.version) === String(version)) || null;
+  }
   function versionSrc(versions, version) {
-    const found = versions.find((item) => String(item.version) === String(version));
+    const found = versionMeta(versions, version);
     return found ? found.src : "";
+  }
+  function versionDownload(versions, version, fallback) {
+    const found = versionMeta(versions, version);
+    return (found && (found.download || found.src)) || fallback || "";
+  }
+  function textKind(kind) {
+    return kind === "text" || kind === "markdown" || kind === "table";
+  }
+  function kindOf(el) {
+    return (el && el.getAttribute("data-kind")) || "image";
+  }
+  function copyText(id, fallback) {
+    const node = document.getElementById(id);
+    return node && node.textContent ? node.textContent : fallback;
+  }
+  function withQuery(src, extra) {
+    if (!src || !extra) return src;
+    return src + (src.indexOf("?") === -1 ? "?" : "&") + extra;
+  }
+  function setPressed(btn, on) {
+    if (btn instanceof HTMLButtonElement) btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  function fillSelect(sel, versions, value) {
+    if (!(sel instanceof HTMLSelectElement)) return;
+    sel.innerHTML = versions.map((item) => '<option value="' + htmlEsc(item.version) + '">v' + htmlEsc(item.version) + "</option>").join("");
+    if (value) sel.value = String(value);
+  }
+  function showNote(truncated) {
+    const note = document.getElementById("lb-note");
+    if (!note) return;
+    if (truncated) {
+      note.hidden = false;
+      note.textContent = copyText("lb-truncated", "Showing the first 1 MB. Download the file for the rest.");
+    } else note.hidden = true;
+  }
+  function unavailableHtml() {
+    return '<p class="lb-unavailable">' + htmlEsc(copyText("lb-unavailable", "This file can't be previewed.")) + "</p>";
+  }
+  function wordSet(lang) {
+    const words = HL_WORDS[lang] || null;
+    if (!words) return null;
+    const set = Object.create(null);
+    words.forEach((word) => { set[word] = 1; });
+    return set;
+  }
+  function highlightJson(src) {
+    let pretty = src;
+    try { pretty = JSON.stringify(JSON.parse(src), null, 2); } catch (err) { pretty = src; }
+    let out = "";
+    let i = 0;
+    while (i < pretty.length) {
+      const c = pretty[i];
+      if (c === '"') {
+        let j = i + 1;
+        while (j < pretty.length) {
+          if (pretty[j] === BS) { j += 2; continue; }
+          if (pretty[j] === '"') { j += 1; break; }
+          j += 1;
+        }
+        const token = pretty.slice(i, j);
+        let k = j;
+        while (pretty[k] === " " || pretty[k] === TAB || pretty[k] === NL) k += 1;
+        const cls = pretty[k] === ":" ? "hl-key" : "hl-str";
+        out += '<span class="' + cls + '">' + htmlEsc(token) + "</span>";
+        i = j;
+        continue;
+      }
+      if ((c >= "0" && c <= "9") || c === "-") {
+        let j = i + 1;
+        while (j < pretty.length && /[0-9.eE+-]/.test(pretty[j])) j += 1;
+        out += '<span class="hl-num">' + htmlEsc(pretty.slice(i, j)) + "</span>";
+        i = j;
+        continue;
+      }
+      const word = pretty.startsWith("true", i) ? "true" : pretty.startsWith("false", i) ? "false" : pretty.startsWith("null", i) ? "null" : "";
+      if (word) {
+        const before = i === 0 || !/[A-Za-z0-9_]/.test(pretty[i - 1] || "");
+        const after = !/[A-Za-z0-9_]/.test(pretty[i + word.length] || "");
+        if (before && after) {
+          out += '<span class="hl-kw">' + word + "</span>";
+          i += word.length;
+          continue;
+        }
+      }
+      out += htmlEsc(c);
+      i += 1;
+    }
+    return out;
+  }
+  function highlight(src, lang) {
+    if (lang === "json") return highlightJson(src);
+    const words = wordSet(lang);
+    const slash = lang === "js" || lang === "ts" || lang === "css";
+    const hash = lang === "py" || lang === "sh" || lang === "yaml" || lang === "log";
+    const xml = lang === "html" || lang === "xml";
+    let out = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      const two = src.slice(i, i + 2);
+      if (slash && two === "/*") {
+        const end = src.indexOf("*/", i + 2);
+        const stop = end === -1 ? src.length : end + 2;
+        out += '<span class="hl-cmt">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if ((lang === "js" || lang === "ts") && two === "//") {
+        const end = src.indexOf(NL, i);
+        const stop = end === -1 ? src.length : end;
+        out += '<span class="hl-cmt">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if (lang === "sql" && two === "--") {
+        const end = src.indexOf(NL, i);
+        const stop = end === -1 ? src.length : end;
+        out += '<span class="hl-cmt">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if (hash && c === "#") {
+        const end = src.indexOf(NL, i);
+        const stop = end === -1 ? src.length : end;
+        out += '<span class="hl-cmt">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if (xml && src.slice(i, i + 4) === "<!--") {
+        const end = src.indexOf("-->", i + 4);
+        const stop = end === -1 ? src.length : end + 3;
+        out += '<span class="hl-cmt">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if (xml && c === "<") {
+        const end = src.indexOf(">", i + 1);
+        const stop = end === -1 ? Math.min(src.length, i + 200) : end + 1;
+        out += '<span class="hl-key">' + htmlEsc(src.slice(i, stop)) + "</span>";
+        i = stop;
+        continue;
+      }
+      if (c === '"' || c === "'" || (c === String.fromCharCode(96) && (lang === "js" || lang === "ts" || lang === "sh"))) {
+        let j = i + 1;
+        while (j < src.length) {
+          if (src[j] === BS) { j += 2; continue; }
+          if (src[j] === c) { j += 1; break; }
+          if (src[j] === NL && c !== String.fromCharCode(96)) break;
+          j += 1;
+        }
+        out += '<span class="hl-str">' + htmlEsc(src.slice(i, j)) + "</span>";
+        i = j;
+        continue;
+      }
+      if (c >= "0" && c <= "9" && (i === 0 || !/[A-Za-z_$]/.test(src[i - 1] || ""))) {
+        let j = i + 1;
+        while (j < src.length && /[0-9.xXa-fA-F_]/.test(src[j])) j += 1;
+        out += '<span class="hl-num">' + htmlEsc(src.slice(i, j)) + "</span>";
+        i = j;
+        continue;
+      }
+      if (words && /[A-Za-z_]/.test(c)) {
+        let j = i + 1;
+        while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j += 1;
+        const word = src.slice(i, j);
+        if (words[word] || (lang === "sql" && words[word.toLowerCase()])) out += '<span class="hl-kw">' + htmlEsc(word) + "</span>";
+        else out += htmlEsc(word);
+        i = j;
+        continue;
+      }
+      out += htmlEsc(c);
+      i += 1;
+    }
+    return out;
+  }
+  function parseTable(text, delim) {
+    const rows = [];
+    let row = [];
+    let cell = "";
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { cell += '"'; i += 1; }
+          else quoted = false;
+        } else cell += c;
+      } else if (c === '"') quoted = true;
+      else if (c === delim) { row.push(cell); cell = ""; }
+      else if (c === NL) { row.push(cell); rows.push(row); row = []; cell = ""; }
+      else if (c !== CR) cell += c;
+    }
+    if (cell.length || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  function tableHtml(text, lang) {
+    const rows = parseTable(text, lang === "tsv" ? TAB : ",");
+    if (!rows.length) return '<p class="empty">Empty file.</p>';
+    const head = rows[0];
+    const body = rows.slice(1, 1001);
+    let html = '<div class="lb-scroll"><table class="lb-table"><thead><tr>';
+    head.forEach((item) => { html += "<th>" + htmlEsc(item) + "</th>"; });
+    html += "</tr></thead><tbody>";
+    body.forEach((line) => {
+      html += "<tr>";
+      const width = Math.max(head.length, line.length);
+      for (let c = 0; c < width; c++) html += "<td>" + htmlEsc(line[c] || "") + "</td>";
+      html += "</tr>";
+    });
+    html += "</tbody></table></div>";
+    if (rows.length > 1001) html += '<p class="lb-note">Showing the first 1000 rows.</p>';
+    return html;
   }
   function layoutSplit(stage) {
     if (!stage) return;
@@ -573,6 +802,7 @@ export const DASHBOARD_JS = `
     stage.setAttribute("aria-valuenow", String(Math.round(lbPos)));
   }
   function renderLightbox() {
+    const token = ++lbToken;
     const dlg = document.getElementById("lightbox");
     const stage = document.getElementById("lb-stage");
     if (!dlg || !stage) return;
@@ -582,59 +812,155 @@ export const DASHBOARD_JS = `
     const el = items[lbIndex];
     if (!el) return;
     const versions = versionsOf(el);
-    const name = el.getAttribute("data-name") || "Image";
+    const name = el.getAttribute("data-name") || "File";
+    const active = versionMeta(versions, lbVersion);
+    const kind = (active && active.kind) || kindOf(el);
+    const lang = (active && active.lang) || el.getAttribute("data-lang") || "";
     const title = document.getElementById("lb-title");
-    const ver = document.getElementById("lb-ver");
+    const verSel = document.getElementById("lb-version");
+    const verLabel = verSel && verSel.closest("label");
     const download = document.getElementById("lb-download");
     const tools = dlg.querySelector(".lb-tools");
     const splitBtn = dlg.querySelector("[data-lb-mode='split']");
     const sideBtn = dlg.querySelector("[data-lb-mode='side']");
-    const canCompare = versions.length > 1;
-    if (tools) tools.hidden = !canCompare;
-    if (splitBtn instanceof HTMLButtonElement) splitBtn.hidden = !canCompare;
-    if (sideBtn instanceof HTMLButtonElement) sideBtn.hidden = !canCompare;
-    if (canCompare && !lbLeft) lbLeft = String(versions[versions.length - 1].version);
-    if (canCompare && !lbRight) lbRight = String(versions[0].version);
-    const leftSel = document.getElementById("lb-left");
-    const rightSel = document.getElementById("lb-right");
-    if (canCompare && leftSel instanceof HTMLSelectElement && rightSel instanceof HTMLSelectElement && leftSel.options.length !== versions.length) {
-      const opts = versions.map((item) => '<option value="' + htmlEsc(item.version) + '">v' + htmlEsc(item.version) + "</option>").join("");
-      leftSel.innerHTML = opts;
-      rightSel.innerHTML = opts;
+    const diffBtn = dlg.querySelector("[data-lb-mode='diff']");
+    const renderedBtn = dlg.querySelector("[data-lb-view='rendered']");
+    const sourceBtn = dlg.querySelector("[data-lb-view='source']");
+    const multi = versions.length > 1;
+    const image = kind === "image";
+    const textual = textKind(kind);
+    if (image && lbMode === "diff") lbMode = "split";
+    if (textual && (lbMode === "split" || lbMode === "side")) lbMode = "diff";
+    if ((!image && !textual) || !multi) {
+      if (lbMode === "split" || lbMode === "side" || lbMode === "diff") lbMode = "single";
     }
-    if (leftSel instanceof HTMLSelectElement && lbLeft) leftSel.value = String(lbLeft);
-    if (rightSel instanceof HTMLSelectElement && lbRight) rightSel.value = String(lbRight);
-    const singleSrc = lbSrc || el.getAttribute("data-src") || "";
+    if (tools) tools.hidden = !(multi && (image || lbMode === "diff"));
+    if (splitBtn instanceof HTMLButtonElement) splitBtn.hidden = !(image && multi);
+    if (sideBtn instanceof HTMLButtonElement) sideBtn.hidden = !(image && multi);
+    if (diffBtn instanceof HTMLButtonElement) diffBtn.hidden = !(textual && multi);
+    const markdown = kind === "markdown" && lbMode !== "diff";
+    if (renderedBtn instanceof HTMLButtonElement) renderedBtn.hidden = !markdown;
+    if (sourceBtn instanceof HTMLButtonElement) sourceBtn.hidden = !markdown;
+    setPressed(renderedBtn, lbView !== "source");
+    setPressed(sourceBtn, lbView === "source");
+    setPressed(splitBtn, lbMode === "split");
+    setPressed(sideBtn, lbMode === "side");
+    setPressed(diffBtn, lbMode === "diff");
+    if (verLabel) verLabel.hidden = !versions.length || lbMode !== "single";
+    if (multi && !lbLeft) lbLeft = String(versions[versions.length - 1].version);
+    if (multi && !lbRight) lbRight = String(versions[0].version);
+    fillSelect(document.getElementById("lb-left"), versions, lbLeft);
+    fillSelect(document.getElementById("lb-right"), versions, lbRight);
     const singleVer = lbVersion || el.getAttribute("data-version") || "";
+    fillSelect(verSel, versions, singleVer);
+    const singleMeta = versionMeta(versions, singleVer);
+    const singleSrc = lbSrc || (singleMeta && singleMeta.src) || el.getAttribute("data-src") || "";
+    const singleDownload = versionDownload(versions, singleVer, el.getAttribute("data-download") || singleSrc);
     if (title) title.textContent = name;
-    if (lbMode !== "single" && canCompare) {
-      const leftSrc = versionSrc(versions, lbLeft);
-      const rightSrc = versionSrc(versions, lbRight);
-      if (ver) ver.textContent = "v" + lbLeft + " · v" + lbRight;
-      if (download instanceof HTMLAnchorElement) {
-        download.href = rightSrc || leftSrc;
-        download.textContent = "Download v" + lbRight;
-      }
-      if (lbMode === "side") {
-        stage.innerHTML = '<div class="lb-side"><figure><img alt="" src="' + htmlEsc(leftSrc) + '"><figcaption>v' + htmlEsc(lbLeft) + '</figcaption></figure><figure><img alt="" src="' + htmlEsc(rightSrc) + '"><figcaption>v' + htmlEsc(lbRight) + "</figcaption></figure></div>";
-      } else {
-        stage.innerHTML = '<div class="split" data-split tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-label="Compare versions"><img alt="" src="' + htmlEsc(rightSrc) + '"><div class="split-clip"><img alt="" src="' + htmlEsc(leftSrc) + '"></div><button type="button" class="split-bar" data-split-bar aria-hidden="true"></button><span class="split-label left">v' + htmlEsc(lbLeft) + '</span><span class="split-label right">v' + htmlEsc(lbRight) + "</span></div>";
-        const split = stage.querySelector("[data-split]");
-        layoutSplit(split);
-        if (split instanceof HTMLElement) split.focus();
-      }
-    } else {
-      if (ver) ver.textContent = singleVer ? "v" + singleVer : "";
-      if (download instanceof HTMLAnchorElement) {
-        download.href = singleSrc;
-        download.textContent = "Download";
-      }
-      stage.innerHTML = '<img class="lb-single" alt="' + htmlEsc(name) + '" src="' + htmlEsc(singleSrc) + '">';
-    }
     const prev = dlg.querySelector("[data-lb-prev]");
     const next = dlg.querySelector("[data-lb-next]");
     if (prev instanceof HTMLButtonElement) prev.disabled = lbIndex <= 0;
     if (next instanceof HTMLButtonElement) next.disabled = lbIndex >= items.length - 1;
+    if (download instanceof HTMLAnchorElement) {
+      download.setAttribute("download", name);
+    }
+    if (lbMode !== "single" && multi && (image || textual)) {
+      const leftSrc = versionSrc(versions, lbLeft);
+      const rightSrc = versionSrc(versions, lbRight);
+      const rightDownload = versionDownload(versions, lbRight, rightSrc);
+      if (download instanceof HTMLAnchorElement) {
+        download.href = rightDownload || leftSrc;
+        download.textContent = "Download v" + lbRight;
+      }
+      if (image && lbMode === "side") {
+        showNote(false);
+        stage.innerHTML = '<div class="lb-side"><figure><img alt="" src="' + htmlEsc(leftSrc) + '"><figcaption>v' + htmlEsc(lbLeft) + '</figcaption></figure><figure><img alt="" src="' + htmlEsc(rightSrc) + '"><figcaption>v' + htmlEsc(lbRight) + "</figcaption></figure></div>";
+        return;
+      }
+      if (image) {
+        showNote(false);
+        stage.innerHTML = '<div class="split" data-split tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-label="Compare versions"><img alt="" src="' + htmlEsc(rightSrc) + '"><div class="split-clip"><img alt="" src="' + htmlEsc(leftSrc) + '"></div><button type="button" class="split-bar" data-split-bar aria-hidden="true"></button><span class="split-label left">v' + htmlEsc(lbLeft) + '</span><span class="split-label right">v' + htmlEsc(lbRight) + "</span></div>";
+        const split = stage.querySelector("[data-split]");
+        layoutSplit(split);
+        if (split instanceof HTMLElement) split.focus();
+        return;
+      }
+      stage.textContent = "Loading…";
+      fetch(withQuery(rightSrc, "diff=" + encodeURIComponent(lbLeft)), { headers: { accept: "application/json" } })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error("diff failed"))))
+        .then((body) => {
+          if (token !== lbToken) return;
+          const lines = body && Array.isArray(body.lines) ? body.lines : [];
+          showNote(!!(body && body.truncated));
+          stage.innerHTML = '<div class="lb-scroll"><div class="diff" aria-label="Version diff">' + lines.map((line) => {
+            const markKind = line.kind === "add" || line.kind === "del" ? line.kind : "ctx";
+            const mark = markKind === "add" ? "+" : markKind === "del" ? "−" : " ";
+            return '<div class="diff-line diff-' + markKind + '"><span class="diff-mark">' + mark + "</span><span>" + (htmlEsc(line.text) || " ") + "</span></div>";
+          }).join("") + "</div></div>";
+        })
+        .catch(() => {
+          if (token !== lbToken) return;
+          showNote(false);
+          stage.innerHTML = unavailableHtml();
+        });
+      return;
+    }
+    if (download instanceof HTMLAnchorElement) {
+      download.href = singleDownload;
+      download.textContent = "Download";
+    }
+    if (kind === "binary") {
+      showNote(false);
+      stage.innerHTML = unavailableHtml();
+      return;
+    }
+    if (image) {
+      showNote(false);
+      stage.innerHTML = '<img class="lb-single" alt="' + htmlEsc(name) + '" src="' + htmlEsc(singleSrc) + '">';
+      return;
+    }
+    if (kind === "pdf") {
+      showNote(false);
+      stage.innerHTML = '<iframe class="lb-pdf" title="' + htmlEsc(name) + '" src="' + htmlEsc(singleSrc) + '"></iframe>';
+      return;
+    }
+    if (kind === "video") {
+      showNote(false);
+      stage.innerHTML = '<video class="lb-media" controls preload="metadata" src="' + htmlEsc(singleSrc) + '"></video>';
+      return;
+    }
+    if (kind === "audio") {
+      showNote(false);
+      stage.innerHTML = '<div class="lb-audio"><audio class="lb-media" controls preload="metadata" src="' + htmlEsc(singleSrc) + '"></audio></div>';
+      return;
+    }
+    stage.textContent = "Loading…";
+    const wantHtml = kind === "markdown" && lbView !== "source";
+    fetch(wantHtml ? withQuery(singleSrc, "render=1") : singleSrc, { headers: { accept: wantHtml ? "text/html" : "text/plain" } })
+      .then((res) => {
+        if (!res.ok) throw new Error("preview failed");
+        const truncated = res.headers.get("x-preview-truncated") === "1";
+        return res.text().then((body) => ({ body, truncated }));
+      })
+      .then((payload) => {
+        if (token !== lbToken) return;
+        showNote(payload.truncated);
+        if (wantHtml) {
+          stage.innerHTML = '<div class="lb-scroll">' + payload.body + "</div>";
+          return;
+        }
+        if (kind === "table") {
+          stage.innerHTML = tableHtml(payload.body, lang);
+          return;
+        }
+        const code = highlight(payload.body, lang === "markdown" ? "txt" : lang);
+        stage.innerHTML = '<div class="lb-scroll"><pre class="lb-code"><code>' + code + "</code></pre></div>";
+      })
+      .catch(() => {
+        if (token !== lbToken) return;
+        showNote(false);
+        stage.innerHTML = unavailableHtml();
+      });
   }
   function openLightbox(el, opts) {
     const root = el.closest(".task") || document;
@@ -642,6 +968,7 @@ export const DASHBOARD_JS = `
     const idx = items.indexOf(el);
     lbIndex = idx >= 0 ? idx : 0;
     lbMode = (opts && opts.mode) || "single";
+    lbView = (opts && opts.view) || "rendered";
     lbPos = 50;
     lbLeft = (opts && opts.left) || "";
     lbRight = (opts && opts.right) || "";
@@ -814,13 +1141,22 @@ export const DASHBOARD_JS = `
       const el = id && document.querySelector('[data-lb][data-id="' + id + '"]');
       const left = pop && pop.querySelector("[data-cmp-left]");
       const right = pop && pop.querySelector("[data-cmp-right]");
-      if (el) openLightbox(el, { mode: "split", left: left ? left.value : "", right: right ? right.value : "" });
+      const cmpKind = (el && el.getAttribute("data-kind")) || cmp.getAttribute("data-kind") || "image";
+      const cmpMode = textKind(cmpKind) ? "diff" : "split";
+      if (el) openLightbox(el, { mode: cmpMode, left: left ? left.value : "", right: right ? right.value : "" });
       if (pop && pop.hidePopover) pop.hidePopover();
+      return;
+    }
+    const viewBtn = target.closest("[data-lb-view]");
+    if (viewBtn) {
+      lbView = viewBtn.getAttribute("data-lb-view") || "rendered";
+      renderLightbox();
       return;
     }
     const modeBtn = target.closest("[data-lb-mode]");
     if (modeBtn) {
-      lbMode = modeBtn.getAttribute("data-lb-mode") || "split";
+      const nextMode = modeBtn.getAttribute("data-lb-mode") || "split";
+      lbMode = lbMode === nextMode ? "single" : nextMode;
       lbSrc = "";
       lbVersion = "";
       renderLightbox();
@@ -829,6 +1165,7 @@ export const DASHBOARD_JS = `
     if (target.closest("[data-lb-prev]")) {
       lbIndex = Math.max(0, lbIndex - 1);
       lbMode = "single";
+      lbView = "rendered";
       lbSrc = "";
       lbVersion = "";
       lbLeft = "";
@@ -839,6 +1176,7 @@ export const DASHBOARD_JS = `
     if (target.closest("[data-lb-next]")) {
       lbIndex += 1;
       lbMode = "single";
+      lbView = "rendered";
       lbSrc = "";
       lbVersion = "";
       lbLeft = "";
@@ -1036,12 +1374,24 @@ export const DASHBOARD_JS = `
       if (name instanceof HTMLInputElement && !name.value) name.value = node.files[0].name;
     }
     if (!(node instanceof HTMLSelectElement)) return;
+    if (node.id === "lb-version") {
+      lbVersion = node.value;
+      lbSrc = "";
+      lbMode = "single";
+      renderLightbox();
+      return;
+    }
     if (node.id === "lb-left" || node.id === "lb-right") {
       const left = document.getElementById("lb-left");
       const right = document.getElementById("lb-right");
       if (left instanceof HTMLSelectElement) lbLeft = left.value;
       if (right instanceof HTMLSelectElement) lbRight = right.value;
-      if (lbMode === "single") lbMode = "split";
+      if (lbMode === "single") {
+        const dlg = document.getElementById("lightbox");
+        const root = (dlg && dlg.closest(".task")) || document;
+        const current = galleryOf(root)[lbIndex];
+        lbMode = textKind(kindOf(current)) ? "diff" : "split";
+      }
       lbSrc = "";
       lbVersion = "";
       renderLightbox();
