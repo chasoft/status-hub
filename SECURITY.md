@@ -65,8 +65,8 @@ Format: `shk_<memberId>_<secret>`.
 
 HTML responses send:
 
-- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
-- `img-src` allows same-origin attachment thumbnails and `https:` images referenced in request markdown. Those images are thumbnails; a click opens them in a dialog. `javascript:` image URLs are not rendered.
+- `content-security-policy: default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: https:; media-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `img-src` allows same-origin attachment thumbnails and `https:` images referenced in request markdown. Those images are thumbnails; a click opens them in a dialog. `javascript:` image URLs are not rendered. `media-src` and `frame-src` allow same-origin audio, video, and PDF previews inside that dialog.
 - The dashboard script is `/assets/dashboard.js` on the UI host. Pages do not use inline event handlers. `connect-src 'self'` allows the board poll.
 - `x-content-type-options: nosniff`
 - `referrer-policy: no-referrer`
@@ -86,7 +86,7 @@ The request document is stored as text. The page renders it with a sanitizer tha
 
 ## Attachments
 
-File bytes live in an optional R2 bucket bound as `ATTACHMENTS`. The binding is commented out in `wrangler.jsonc`. The bucket is not a public bucket and has no public custom domain. Downloads are `GET /t/:code/attachments/:id` on `UI_HOST` after the same UI sign-in as the board. The MCP host does not serve those bytes. A download sets `Content-Disposition` (`inline` for png, jpeg, gif, and webp; `attachment` otherwise), `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`, and `Content-Security-Policy: default-src 'none'; sandbox`.
+File bytes live in an optional R2 bucket bound as `ATTACHMENTS`. The binding is commented out in `wrangler.jsonc`. The bucket is not a public bucket and has no public custom domain. Downloads are `GET /t/:code/attachments/:id` on `UI_HOST` after the same UI sign-in as the board. Previews are `GET /t/:code/attachments/:id/preview` on the same host and the same sign-in. The MCP host does not serve those bytes. A download sets `Content-Disposition` (`inline` for png, jpeg, gif, webp, avif, and svg; `attachment` otherwise), `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`, and `Content-Security-Policy: default-src 'none'; sandbox`. HTML downloads are sent as `text/plain` so the browser does not render them. A preview uses the same sign-in and the same `nosniff` header. Images, including SVG, are served as images and shown in `<img>` (SVG scripts do not run). PDF is `application/pdf` with `Content-Disposition: inline`. Video and audio use their media types. Markdown, CSV, and other text are `text/plain` (markdown can also be returned as sanitized HTML with `?render=1`). HTML attachments are previewed as source text, never as a document. Unknown bytes return a short plain-text message instead of the file. Text previews stop after 1 MB.
 
 Each upload inserts a new version and a new R2 key. Keys are not overwritten. The size limit defaults to 10 MiB and is capped at 25 MiB. The MIME allowlist rejects types that are not listed. Declared images must match their magic bytes. `add_attachment` with `source_url` fetches only public `http` or `https` URLs. Hosts that are loopback, `.local`, link-local, or private (including cloud metadata addresses) are rejected, and redirects are checked the same way.
 

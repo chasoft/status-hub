@@ -2,7 +2,8 @@
 import { loadCursorAgent, type LiveAgent } from "./agent";
 import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
-import { isImageMime, listAttachments } from "./attachments";
+import { listAttachments } from "./attachments";
+import { PREVIEW_TRUNCATED, PREVIEW_UNAVAILABLE, previewPlan } from "./preview";
 import { attachmentSummary, getRequestDocument, isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type OutputRef, type PeriodRow, type Status } from "./core";
 import { diffLines } from "./diff";
 import { featurePalette, paletteStyle } from "./feature-color";
@@ -325,7 +326,7 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .md hr{border:0;border-top:1px solid var(--bd)}
 .md-thumb,.thumb{width:80px;height:80px;padding:0;overflow:hidden;flex:none;background:var(--cell);border-radius:var(--radius);line-height:0}
 .md-thumb img,.thumb img{width:100%;height:100%;object-fit:cover;display:block}
-.file-icon{width:80px;height:80px;flex:none;display:grid;place-items:center;background:var(--cell);border:1px solid var(--bd);border-radius:var(--radius);color:var(--mut)}
+.file-icon,button.file-icon{width:80px;height:80px;flex:none;display:grid;place-items:center;background:var(--cell);border:1px solid var(--bd);border-radius:var(--radius);color:var(--mut);padding:0}
 .attach-groups{display:flex;flex-direction:column;gap:16px;margin:0 0 16px}
 .group-h{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .group-h h3{margin:0;font-size:14px;flex:1}
@@ -349,12 +350,29 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .hist-compare select{width:auto;min-width:4.5rem}
 dialog.file-dialog{max-width:min(440px,calc(100vw - 32px))}
 dialog.lightbox{width:min(96vw,1100px);max-width:min(96vw,1100px);max-height:96dvh;border-radius:var(--radius)}
-.lb-bar,.lb-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px}
-.lb-bar{border-bottom:1px solid var(--bd)}
-.lb-bar h2{margin:0;font-size:15px;flex:1;min-width:0}
-.lb-tools{padding-top:0}
-.lb-tools select{width:auto;min-width:4.5rem}
-.lb-stage{margin:0 16px 16px;height:min(72dvh,760px);min-height:240px;background:var(--cell);border-radius:var(--radius);position:relative;overflow:hidden}
+dialog.lightbox[open]{display:flex;flex-direction:column;overflow:hidden;height:min(96dvh,920px)}
+.lb-bar,.lb-tools:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:16px}
+.lb-bar{border-bottom:1px solid var(--bd);flex:none}
+.lb-bar h2{margin:0;font-size:15px;flex:1;min-width:8rem}
+.lb-tools:not([hidden]){padding-top:0;flex:none}
+.lb-tools select,.lb-version select{width:auto;min-width:4.5rem}
+.lb-version:not([hidden]){display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px}
+.lb-stage{margin:0 16px 16px;height:min(72dvh,760px);min-height:240px;background:var(--cell);border-radius:var(--radius);position:relative;overflow:hidden;display:flex;flex-direction:column;flex:1}
+.lb-stage.lb-doc{margin:0;background:var(--card)}
+.lb-scroll{flex:1;min-height:0;overflow:auto;padding:16px;overscroll-behavior:contain}
+.lb-code{margin:0;font:13px/1.45 ui-monospace,SFMono-Regular,monospace;white-space:pre;tab-size:2}
+.lb-table{font:13px/1.4 ui-monospace,SFMono-Regular,monospace}
+.lb-scroll thead th{position:sticky;top:0;background:var(--card);z-index:1}
+.lb-note{flex:none;margin:0 16px 8px;color:var(--mut);font-size:12px}
+.lb-unavailable{margin:16px;color:var(--tx)}
+.lb-pdf{flex:1;width:100%;height:100%;min-height:0;border:0;background:#525659}
+.lb-media{max-width:100%;max-height:100%;margin:auto}
+.lb-audio{flex:1;display:grid;place-items:center;padding:16px}
+.hl-key{color:#0e6b4f}
+.hl-str{color:#8a5a12}
+.hl-num{color:#1d4e89}
+.hl-kw{color:#5b3d8f}
+.hl-cmt{color:var(--mut)}
 .lb-single{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .split{position:relative;width:100%;height:100%;touch-action:none;user-select:none}
 .split img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
@@ -371,6 +389,15 @@ dialog.lightbox{width:min(96vw,1100px);max-width:min(96vw,1100px);max-height:96d
 .tab-scroll>h2{margin:0 0 12px;font-size:16px}
 .diff-add{background:#e7f6ec}
 .diff-del{background:#fdeceb}
+@media (prefers-color-scheme: dark){
+  .diff-add{background:#163528}
+  .diff-del{background:#3a2220}
+  .hl-key{color:#7dcea0}
+  .hl-str{color:#e6b15c}
+  .hl-num{color:#9ec1ee}
+  .hl-kw{color:#d2a8ff}
+  .lead{background:#2a2418}
+}
 .diff-mark{width:1ch;flex:none}
 [popover]{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:12px;box-shadow:var(--shadow);max-width:min(360px,calc(100vw - 24px));max-height:min(70dvh,520px);overflow:auto}
 .hist-pop[popover]{border-radius:var(--radius);max-width:min(420px,calc(100vw - 32px))}
@@ -936,6 +963,10 @@ function attachmentSrc(code: string, id: number, version: number): string {
   return `/t/${encodeURIComponent(code)}/attachments/${id}?v=${version}`;
 }
 
+function attachmentPreviewSrc(code: string, id: number, version: number): string {
+  return `/t/${encodeURIComponent(code)}/attachments/${id}/preview?v=${version}`;
+}
+
 function dueInputValue(ms: number | null | undefined, offsetMinutes: number): string {
   if (!ms) return "";
   const d = new Date(ms + offsetMinutes * 60_000);
@@ -1104,25 +1135,34 @@ ${requestBody}
   const links = (await attachmentSummary(db, code)).output_links;
   const groupHtml = (title: string, group: "requirement" | "output", items: typeof files.requirement) => {
     const rows = items.map((item) => {
+      const plan = previewPlan(item.name, item.latest.mime);
       const src = attachmentSrc(code, item.id, item.latest.version);
-      const image = isImageMime(item.latest.mime);
-      const versions = esc(JSON.stringify(item.versions.map((v) => ({ version: v.version, src: attachmentSrc(code, item.id, v.version) }))));
+      const preview = attachmentPreviewSrc(code, item.id, item.latest.version);
+      const image = plan.kind === "image";
+      const comparable = item.versions.length > 1 && (image || plan.kind === "text" || plan.kind === "markdown" || plan.kind === "table");
+      const versions = esc(JSON.stringify(item.versions.map((v) => {
+        const versionPlan = previewPlan(item.name, v.mime);
+        return {
+          version: v.version,
+          src: attachmentPreviewSrc(code, item.id, v.version),
+          download: attachmentSrc(code, item.id, v.version),
+          kind: versionPlan.kind,
+          lang: versionPlan.lang,
+        };
+      })));
+      const openAttrs = `data-lb data-id="${item.id}" data-kind="${plan.kind}" data-lang="${esc(plan.lang)}" data-src="${esc(preview)}" data-name="${esc(item.name)}" data-version="${item.latest.version}" data-download="${esc(src)}" data-versions="${versions}"`;
       const lead = image
-        ? `<button type="button" class="thumb" data-lb data-id="${item.id}" data-src="${esc(src)}" data-name="${esc(item.name)}" data-version="${item.latest.version}" data-download="${esc(src)}" data-versions="${versions}" aria-label="Preview ${esc(item.name)}"><img src="${esc(src)}" alt=""></button>`
-        : `<span class="file-icon">${ICON_FILE}</span>`;
-      const name = image
-        ? `<button type="button" class="file-open" data-lb-open="${item.id}">${esc(item.name)}</button>`
-        : esc(item.name);
+        ? `<button type="button" class="thumb" ${openAttrs} aria-label="Preview ${esc(item.name)}"><img src="${esc(preview)}" alt=""></button>`
+        : `<button type="button" class="file-icon" ${openAttrs} aria-label="Preview ${esc(item.name)}">${ICON_FILE}</button>`;
+      const name = `<button type="button" class="file-open" data-lb-open="${item.id}">${esc(item.name)}</button>`;
       const historyId = `hist-${group}-${item.id}`;
       const older = item.versions[1]?.version ?? item.versions[0]?.version;
       const historyRows = item.versions.map((v) => {
         const href = attachmentSrc(code, item.id, v.version);
-        const verCell = image
-          ? `<button type="button" data-lb-jump="${item.id}" data-src="${esc(href)}" data-version="${v.version}">v${v.version}</button>`
-          : `v${v.version}`;
-        return `<tr><td>${verCell}</td><td>${esc(formatBytes(v.bytes))}</td><td>${esc(v.author_id)}</td><td>${fmt(v.at, tz)}</td><td>${esc(v.note ?? "")}</td><td><a href="${esc(href)}" aria-label="Download ${esc(item.name)} v${v.version}">${ICON_DOWNLOAD}</a></td></tr>`;
+        const previewHref = attachmentPreviewSrc(code, item.id, v.version);
+        return `<tr><td><button type="button" data-lb-jump="${item.id}" data-src="${esc(previewHref)}" data-version="${v.version}">v${v.version}</button></td><td>${esc(formatBytes(v.bytes))}</td><td>${esc(v.author_id)}</td><td>${fmt(v.at, tz)}</td><td>${esc(v.note ?? "")}</td><td><a href="${esc(href)}" aria-label="Download ${esc(item.name)} v${v.version}">${ICON_DOWNLOAD}</a></td></tr>`;
       }).join("");
-      const compare = image && item.versions.length > 1 ? `<div class="hist-compare"><label>Left <select data-cmp-left aria-label="Left version">${versionOptions(item.versions, older ?? null)}</select></label><label>Right <select data-cmp-right aria-label="Right version">${versionOptions(item.versions, item.latest.version)}</select></label><button type="button" data-open-compare data-id="${item.id}">Compare</button></div>` : "";
+      const compare = comparable ? `<div class="hist-compare"><label>Left <select data-cmp-left aria-label="Left version">${versionOptions(item.versions, older ?? null)}</select></label><label>Right <select data-cmp-right aria-label="Right version">${versionOptions(item.versions, item.latest.version)}</select></label><button type="button" data-open-compare data-id="${item.id}" data-kind="${plan.kind}">Compare</button></div>` : "";
       const pop = `<div id="${historyId}" class="hist-pop" popover><p><strong>${esc(item.name)}</strong></p><table><thead><tr><th>Version</th><th>Size</th><th>By</th><th>When</th><th>Note</th><th></th></tr></thead><tbody>${historyRows}</tbody></table>${compare}</div>`;
       const uploadBtn = canEdit && attachmentsEnabled ? `<button type="button" data-dialog-open="add-file" data-file-group="${group}" data-file-name="${esc(item.name)}" aria-label="New version of ${esc(item.name)}">${ICON_UPLOAD}</button>` : "";
       return `<li class="file-row">${lead}<div class="file-main"><div class="file-name">${name} <span class="pill">v${item.latest.version}</span></div><div class="file-meta">${esc(formatBytes(item.latest.bytes))} · ${esc(item.latest.author_id)} · ${fmt(item.latest.at, tz)}</div></div><div class="file-actions"><a href="${esc(src)}" aria-label="Download ${esc(item.name)}">${ICON_DOWNLOAD}</a>${uploadBtn}<button type="button" popovertarget="${historyId}" aria-label="History for ${esc(item.name)}">${ICON_HISTORY}</button></div>${pop}</li>`;
@@ -1137,7 +1177,7 @@ ${requestBody}
   const attachError = fieldError("attachment") || fieldError("output_link");
   const fileDialog = canEdit && attachmentsEnabled ? `<dialog id="add-file" class="file-dialog" aria-labelledby="add-file-title"><form method="post" action="/t/${encodeURIComponent(code)}/attachments" enctype="multipart/form-data"><div class="dialog-bar"><h2 id="add-file-title">Add file</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body"><input type="hidden" name="group" value="requirement"><div class="dropzone" data-dropzone><p data-file-label>Drop a file here, or choose one.</p><input type="file" name="file" required aria-label="File"></div><label>Name <input name="name" required maxlength="200" aria-label="File name"></label><label>Note <input name="note" maxlength="500" aria-label="File note"></label><p class="row"><button type="submit">Upload</button></p></div></form></dialog>` : "";
   const linkDialog = canEdit ? `<dialog id="add-link" class="file-dialog" aria-labelledby="add-link-title"><form method="post" action="/t/${encodeURIComponent(code)}/output-link"><div class="dialog-bar"><h2 id="add-link-title">Add output link</h2><button type="button" data-close-dialog>Close</button></div><div class="dialog-body"><label>Output link <input type="url" name="url" required placeholder="https://" aria-label="Output link" value="${esc(fieldError("output_link") ? notice?.value ?? "" : "")}"></label><label>Note <input name="note" maxlength="500" aria-label="Output link note"></label><p class="row"><button type="submit">Add link</button></p></div></form></dialog>` : "";
-  const lightbox = `<dialog id="lightbox" class="lightbox" aria-labelledby="lb-title"><div class="lb-bar"><button type="button" data-lb-prev aria-label="Previous image">Prev</button><h2 id="lb-title">Image</h2><span id="lb-ver" class="pill"></span><a id="lb-download" href="#">Download</a><button type="button" data-lb-mode="split" hidden>Split</button><button type="button" data-lb-mode="side" hidden>Side by side</button><button type="button" data-lb-next aria-label="Next image">Next</button><button type="button" data-close-dialog aria-label="Close preview">Close</button></div><div class="lb-tools" hidden><label>Left <select id="lb-left" aria-label="Left version"></select></label><label>Right <select id="lb-right" aria-label="Right version"></select></label></div><div id="lb-stage" class="lb-stage"></div></dialog>`;
+  const lightbox = `<dialog id="lightbox" class="lightbox" aria-labelledby="lb-title"><div class="lb-bar"><button type="button" data-lb-prev aria-label="Previous file">Prev</button><h2 id="lb-title">File</h2><label class="lb-version">Version <select id="lb-version" aria-label="Version"></select></label><a id="lb-download" href="#" download>Download</a><button type="button" data-lb-view="rendered" hidden>Rendered</button><button type="button" data-lb-view="source" hidden>Source</button><button type="button" data-lb-mode="split" hidden>Split</button><button type="button" data-lb-mode="side" hidden>Side by side</button><button type="button" data-lb-mode="diff" hidden>Compare</button><button type="button" data-lb-next aria-label="Next file">Next</button><button type="button" data-close-dialog aria-label="Close preview">Close</button></div><div class="lb-tools" hidden><label>Left <select id="lb-left" aria-label="Left version"></select></label><label>Right <select id="lb-right" aria-label="Right version"></select></label></div><p id="lb-note" class="lb-note" hidden></p><div id="lb-stage" class="lb-stage"></div><p id="lb-unavailable" hidden>${PREVIEW_UNAVAILABLE}</p><p id="lb-truncated" hidden>${PREVIEW_TRUNCATED}</p></dialog>`;
   const attachmentsBlock = `<section class="attach-groups" id="attachments">${attachError ? `<p class="flag">${esc(attachError)}</p>` : ""}${attachmentsEnabled ? groupHtml("Requirement", "requirement", files.requirement) + groupHtml("Output", "output", files.output) : groupHtml("Output links", "output", [])}</section>`;
   const taskDialogs = `${fileDialog}${linkDialog}${lightbox}`;
   const overviewBadge = unread ? ` <span class="count is-on">${unread}</span>` : "";

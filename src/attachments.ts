@@ -11,13 +11,33 @@ export const DEFAULT_ATTACHMENT_MIME = [
   "image/jpeg",
   "image/gif",
   "image/webp",
+  "image/avif",
+  "image/svg+xml",
   "application/pdf",
   "text/plain",
   "text/markdown",
   "text/csv",
+  "text/tab-separated-values",
+  "text/yaml",
+  "application/yaml",
+  "text/xml",
+  "application/xml",
+  "text/html",
+  "text/css",
+  "text/javascript",
+  "application/javascript",
+  "text/x-python",
+  "text/x-shellscript",
+  "application/x-sh",
+  "application/sql",
   "application/json",
   "video/mp4",
   "video/webm",
+  "video/quicktime",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "audio/mp4",
 ];
 
 export const ATTACHMENTS_UNAVAILABLE =
@@ -90,17 +110,52 @@ export function normalizeMime(raw: string): string {
   return raw.trim().toLowerCase().split(";")[0]!.trim();
 }
 
-export function sniffImage(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/gif" | "image/webp" | null {
+function brandAt(bytes: Uint8Array, offset: number): string {
+  if (offset + 4 > bytes.length) return "";
+  return String.fromCharCode(bytes[offset]!, bytes[offset + 1]!, bytes[offset + 2]!, bytes[offset + 3]!);
+}
+
+function sniffAvif(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  if (brandAt(bytes, 4) !== "ftyp") return false;
+  if (brandAt(bytes, 8) === "avif" || brandAt(bytes, 8) === "avis") return true;
+  const end = Math.min(bytes.length, 32);
+  for (let i = 16; i + 4 <= end; i += 4) {
+    const brand = brandAt(bytes, i);
+    if (brand === "avif" || brand === "avis") return true;
+  }
+  return false;
+}
+
+export function sniffImage(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif" | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "image/gif";
   if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
     && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  if (sniffAvif(bytes)) return "image/avif";
   return null;
 }
 
+/** SVG opened as an image. A leading HTML document is rejected. Scripts inside SVG are not executed by <img>. */
+export function sniffSvg(bytes: Uint8Array): boolean {
+  if (!bytes.length) return false;
+  const sample = new TextDecoder().decode(bytes.subarray(0, 4096)).replace(/^\uFEFF/, "").trim().toLowerCase();
+  if (sample.startsWith("<!doctype html") || sample.startsWith("<html")) return false;
+  if (!(sample.startsWith("<svg") || sample.startsWith("<?xml"))) return false;
+  return sample.includes("<svg");
+}
+
+export function isRasterImageMime(mime: string): boolean {
+  return mime === "image/png" || mime === "image/jpeg" || mime === "image/gif" || mime === "image/webp" || mime === "image/avif";
+}
+
+export function isSvgMime(mime: string): boolean {
+  return mime === "image/svg+xml";
+}
+
 export function isImageMime(mime: string): boolean {
-  return mime === "image/png" || mime === "image/jpeg" || mime === "image/gif" || mime === "image/webp";
+  return isRasterImageMime(mime) || isSvgMime(mime);
 }
 
 function cleanName(name: string): string {
@@ -126,9 +181,12 @@ function checkBytes(bytes: Uint8Array, mime: string, policy: AttachmentPolicy): 
   if (!declared || !policy.allowedMime.has(declared)) {
     throw new AppError("BAD_REQUEST", `MIME type is not allowed: ${declared || "(empty)"}`);
   }
-  if (isImageMime(declared)) {
+  if (isRasterImageMime(declared)) {
     const sniffed = sniffImage(bytes);
     if (sniffed !== declared) throw new AppError("BAD_REQUEST", `file contents are not ${declared}`);
+  }
+  if (isSvgMime(declared) && !sniffSvg(bytes)) {
+    throw new AppError("BAD_REQUEST", "file contents are not image/svg+xml");
   }
   return declared;
 }
@@ -397,7 +455,7 @@ export async function getAttachmentObject(
   task: string,
   id: number,
   version?: number | null,
-): Promise<{ name: string; mime: string; version: number; body: ReadableStream }> {
+): Promise<{ name: string; mime: string; version: number; bytes: number; body: ReadableStream }> {
   const store = requireBucket(bucket);
   if (!Number.isInteger(id) || id < 1) throw new AppError("NOT_FOUND", "attachment was not found");
   const att = await db.prepare(
@@ -406,15 +464,15 @@ export async function getAttachmentObject(
   if (!att) throw new AppError("NOT_FOUND", "attachment was not found");
   const ver = version == null
     ? await db.prepare(
-      "SELECT version, mime, r2_key FROM attachment_versions WHERE attachment_id = ? ORDER BY version DESC LIMIT 1",
-    ).bind(att.id).first<{ version: number; mime: string; r2_key: string }>()
+      "SELECT version, mime, bytes, r2_key FROM attachment_versions WHERE attachment_id = ? ORDER BY version DESC LIMIT 1",
+    ).bind(att.id).first<{ version: number; mime: string; bytes: number; r2_key: string }>()
     : await db.prepare(
-      "SELECT version, mime, r2_key FROM attachment_versions WHERE attachment_id = ? AND version = ?",
-    ).bind(att.id, version).first<{ version: number; mime: string; r2_key: string }>();
+      "SELECT version, mime, bytes, r2_key FROM attachment_versions WHERE attachment_id = ? AND version = ?",
+    ).bind(att.id, version).first<{ version: number; mime: string; bytes: number; r2_key: string }>();
   if (!ver) throw new AppError("NOT_FOUND", "attachment version was not found");
   const obj = await store.get(ver.r2_key);
   if (!obj) throw new AppError("NOT_FOUND", "attachment bytes were not found");
-  return { name: att.name, mime: ver.mime, version: ver.version, body: obj.body };
+  return { name: att.name, mime: ver.mime, version: ver.version, bytes: ver.bytes, body: obj.body };
 }
 
 export function contentDisposition(name: string, inline: boolean): string {

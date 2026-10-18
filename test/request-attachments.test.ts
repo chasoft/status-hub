@@ -159,11 +159,11 @@ describe("attachments and review", () => {
     expect(page).toContain("History for notes.txt");
     expect(page).toContain("Add file");
     expect(page).not.toContain("attach-preview");
-    expect(page).toContain(`src="/t/${code}/attachments/${shot.id}?v=1"`);
+    expect(page).toContain(`src="/t/${code}/attachments/${shot.id}/preview?v=1"`);
     expect(page).not.toContain(first.r2_key);
 
     const badType = await addAttachmentBytes(env.DB, env.ATTACHMENTS, peter, {
-      task: code, group: "requirement", name: "page.html", mime: "text/html", bytes: new TextEncoder().encode("<b>x</b>"),
+      task: code, group: "requirement", name: "blob.bin", mime: "application/octet-stream", bytes: Uint8Array.from([1, 2, 3]),
     }, policy).catch((err) => err);
     expect(badType).toMatchObject({ code: "BAD_REQUEST" });
     const fakePng = await addAttachmentBytes(env.DB, env.ATTACHMENTS, peter, {

@@ -149,7 +149,7 @@ pnpm run deploy:staging
 | `BLOCKED_HOURS` | unset | `settings.blocked_hours`, seeded as `2` | Optional alert override. |
 | `TZ_OFFSET_MINUTES` | unset | `settings.tz_offset_minutes`, seeded as `0` | Optional timezone override, in minutes east of UTC. `0` is UTC. A set value of `0` still overrides the table. |
 | `ATTACHMENT_MAX_BYTES` | unset | `10485760` (10 MiB). A blank or non-numeric value uses that default. | Max bytes for one attachment upload. Values above `26214400` (25 MiB) are capped. |
-| `ATTACHMENT_ALLOWED_MIME` | unset | png, jpeg, gif, webp, pdf, `text/plain`, `text/markdown`, `text/csv`, `application/json`, `video/mp4`, `video/webm` | Comma-separated MIME allowlist. A blank value uses the default list. Images must match their magic bytes. |
+| `ATTACHMENT_ALLOWED_MIME` | unset | png, jpeg, gif, webp, avif, svg, pdf, plain text, markdown, csv, tsv, yaml, xml, html, css, javascript, python, shell, sql, json, mp4, webm, quicktime, mpeg audio, wav, ogg, mp4 audio | Comma-separated MIME allowlist. A blank value uses the default list. Raster images must match their magic bytes. SVG must start with `<svg` or an XML declaration that contains `<svg`. HTML is stored but previewed as source text. |
 
 Lists are comma-separated. Whitespace around each item is ignored. Empty items are dropped. A repeated id in `OWNER_IDS` or `APPROVER_IDS` is kept once, at its first position. In `UI_MEMBER_EMAILS` and `LEADERSHIP_AUTHORS`, emails are lowercased, and a repeated email keeps the last value. An item without `=` is ignored.
 

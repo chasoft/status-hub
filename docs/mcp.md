@@ -788,7 +788,7 @@ A stored result omits the R2 key. Fields: `id`, `task`, `group`, `name`, `versio
 }
 ```
 
-Downloads are `GET /t/<task>/attachments/<id>` on the UI host, with the same sign-in as the board. `?v=` selects an older version. The bucket is not public.
+Downloads are `GET /t/<task>/attachments/<id>` on the UI host, with the same sign-in as the board. `?v=` selects an older version. Previews are `GET /t/<task>/attachments/<id>/preview` on that same host. The bucket is not public.
 
 ### list_attachments
 
