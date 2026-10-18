@@ -124,7 +124,7 @@ describe("Kanban feature groups", () => {
     const body = await html("/?project=KBN");
     const pal = featurePalette(grouped.code);
     expect(body).toContain('class="sidebar"');
-    expect(body).toContain('src="/assets/dashboard.js"');
+    expect(body).toContain('src="/assets/dashboard.js?v=dev"');
     expect(body).toContain(`data-group="board:pending_approval:${grouped.code}"`);
     expect(body).toContain(`data-feature="${grouped.code}"`);
     expect(body).toContain(pal.light.bg);
