@@ -40,7 +40,7 @@ The first feature in a module is `001`. The first task on a feature is `.1`. The
 | `backlog` | `assigned`, `pending_approval`, `cancelled` |
 | `assigned` | `in_progress`, `pending_approval`, `cancelled` |
 | `in_progress` | `review`, `assigned`, `cancelled` |
-| `review` | `done`, `in_progress`, `cancelled` |
+| `review` | `done`, `in_progress`, `assigned` (failed review, note required), `cancelled` |
 | `blocked` | `pending_approval`, `cancelled` |
 | `done` | none |
 | `cancelled` | none |
@@ -96,10 +96,11 @@ Group is derived from the member row on the bot token or, for a UI write, from t
 | Admin | `is_admin = 1` or role `admin` | Everything a leader can do, plus `create_project`, `create_module`, `set_token_hash`, `set_reviewer`, `set_member_webhook`, `list_webhooks`, `test_member_webhook`, and leaving `pending_approval`. |
 | Leader | Role `pm`, `po`, `lead`, or admin | `create_feature`, `assign_task`, `list_alerts`, and status, notes, blockers, and link edits on tasks assigned to someone else. |
 | `pm` or admin | Role `pm`, or admin | Moving an existing task into `pending_approval`. Other leaders cannot. |
+| Reviewer | `reviewer_id` is the caller | `add_note`; `report_status` from `review` to `done` or `assigned` only; `set_agent`. |
 | Assignee | `assignee_id` is the caller | `report_status`, `add_note`, `set_blocker`, `resolve_blocker`, `update_task`, `set_agent`, `set_request`, `add_attachment`, and output links on that task. |
 | Any member | Any active bot or mapped UI member | `create_task`, `whoami`, `list_my_tasks`, `get_task`, `get_request`, `list_attachments`, `get_task_timeline`, `get_project_overview`. |
 
-A reviewer is not granted `report_status` by `reviewer_id` alone. The reviewer needs to be the assignee or a leader. The reviewer can call `set_agent` on that task. `list_my_tasks` with `role: "reviewer"` or `role: "any"` lists tasks where the caller is the reviewer.
+The task's reviewer (`reviewer_id`) may call `add_note` on that task, and may give the verdict on a task in `review` with `report_status`: `done` to pass (note required) or `assigned` to fail (note required). Nothing else: other statuses, blockers, links, and changing the reviewer stay with the assignee or a leader. The reviewer can also call `set_agent` on that task. A failed review (`review` → `assigned`, by the reviewer or a leader) sends `task.assigned` with `reason: "review_failed"` and the note to the assignee's webhook. `list_my_tasks` with `role: "reviewer"` or `role: "any"` lists tasks where the caller is the reviewer.
 
 `get_task` marks leadership feedback read when the caller is the current assignee, and clears the open `LEADERSHIP_FEEDBACK` alert on that task. A later assignee sees the same notes as unread again. `list_my_tasks` includes a task outside the status filter when the caller is the assignee and feedback is still unread.
 

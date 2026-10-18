@@ -203,13 +203,13 @@ A task the caller is assigned to, with unread leadership feedback, is included e
 
 Change a task's status and record an update. Call it when the status changes, not on a timer.
 
-The assignee or a leader. Entering `pending_approval` is `pm` or admin only. Leaving `pending_approval` is admin only.
+The assignee or a leader. The task's reviewer may only move `review` to `done` (pass) or `assigned` (fail) and may not pass `reviewer`. Entering `pending_approval` is `pm` or admin only. Leaving `pending_approval` is admin only.
 
 | Argument | Required | Rule |
 |---|---|---|
 | `task` | yes | Task code, for example `APP-CORE-001.1`. |
 | `status` | yes | `pending_approval`, `backlog`, `assigned`, `in_progress`, `review`, `blocked`, `done`, or `cancelled`. `blocked` is rejected here. |
-| `note` | when finishing or rejecting | Up to 500 characters. Required for `done`, and required when rejecting `pending_approval` to `cancelled`. |
+| `note` | when finishing, failing a review, or rejecting | Up to 500 characters. Required for `done`, for `review` → `assigned` (failed review), and when rejecting `pending_approval` to `cancelled`. |
 | `links` | no | Up to 10 `http` or `https` URLs. The first URL containing `/pull/` followed by digits is written into `pr_url`. On a move to `review`, these URLs also count as output links when the task has no Output file and no output link yet. |
 | `reviewer` | when moving to `review` with no reviewer yet | Active member id. |
 | `approved_by` | when leaving `pending_approval` | Configured owner or approver id. |
@@ -217,6 +217,8 @@ The assignee or a leader. Entering `pending_approval` is `pm` or admin only. Lea
 A move to `review` requires an Output attachment (the latest version of a file in the Output group) or an output link. A Requirement file does not satisfy this. Links on this call count. The update stores `request_version` (the latest request version, or null) and `output_ref` (`{"attachments":[{"id","name","version"}],"links":[...]}`). The reviewer check runs first.
 
 Move to `assigned` when work stops. `in_progress` is only for the time someone is actually working. See [workflow](workflow.md).
+
+A failed review moves `review` to `assigned` with a note saying what failed. The assignee's webhook gets `task.assigned` with `reason: "review_failed"`, `note`, and `assigned_by`.
 
 ```json
 {
@@ -278,7 +280,7 @@ Result fields: `code`, `from`, `to`, `approved_by`, `reviewer_id`, `alerts`.
 
 Record progress without changing status. This refreshes `last_update_at` and clears `STALE`.
 
-The assignee or a leader.
+The assignee, the task's reviewer, or a leader.
 
 | Argument | Required | Rule |
 |---|---|---|

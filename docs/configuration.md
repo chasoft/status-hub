@@ -343,7 +343,7 @@ Each event goes to the task's **assignee**. An action the assignee took themselv
 | `type` | When |
 |---|---|
 | `feedback.added` | A leadership author posts feedback on the task (any status, including `done`). |
-| `task.assigned` | The member becomes the assignee of an actionable task (`assign_task` on an `assigned`, `in_progress`, `review`, or `blocked` task, `create_task` with `status: "assigned"`), or their task moves from `backlog` or `pending_approval` to `assigned`. |
+| `task.assigned` | The member becomes the assignee of an actionable task (`assign_task` on an `assigned`, `in_progress`, `review`, or `blocked` task, `create_task` with `status: "assigned"`), or their task moves from `backlog` or `pending_approval` to `assigned`, or a review fails (`review` → `assigned`; adds `reason: "review_failed"` and `note`). |
 | `blocker.resolved` | Someone else resolves a blocker on the member's `blocked` task. |
 | `webhook.test` | An admin calls `test_member_webhook`. |
 

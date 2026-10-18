@@ -65,7 +65,7 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
       offset: z.number().int().min(0).optional() },
     (a) => core.listMyTasks(db, me, a));
   tool("report_status",
-    "Change a task's status and record an update. Call only when the status changes. done requires a note; put a PR link in links. Moving to review requires reviewer (an active member id) when the task has no reviewer_id, and at least one Output attachment or an output link (a stored output link, or links on this call). The update records the request version and the output versions it refers to. in_progress returns to assigned when the agent stops. A pm or admin may move backlog, assigned, or blocked to pending_approval (anyone else gets 403). From blocked, open need_approval blockers are closed; any other open blocker kind returns 400. Leaving pending_approval (to backlog or assigned, or rejecting to cancelled) is admin-only and requires approved_by to be a configured owner or approver id. Rejection requires a note.",
+    "Change a task's status and record an update. Call only when the status changes. done requires a note; put a PR link in links. Moving to review requires reviewer (an active member id) when the task has no reviewer_id, and at least one Output attachment or an output link (a stored output link, or links on this call). The update records the request version and the output versions it refers to. in_progress returns to assigned when the agent stops. review → assigned is a failed review and requires a note; the assignee's webhook gets task.assigned with that note. The task's reviewer (reviewer_id) may only move review → done (pass) or review → assigned (fail, note required). A pm or admin may move backlog, assigned, or blocked to pending_approval (anyone else gets 403). From blocked, open need_approval blockers are closed; any other open blocker kind returns 400. Leaving pending_approval (to backlog or assigned, or rejecting to cancelled) is admin-only and requires approved_by to be a configured owner or approver id. Rejection requires a note.",
     { task: taskCode, status, note: z.string().max(core.NOTE_MAX).optional(), links: z.array(z.string()).max(10).optional(),
       reviewer: z.string().max(32).optional().describe("Active member id. Required when moving to review if the task has no reviewer yet."),
       approved_by: approver.optional() },
@@ -76,7 +76,7 @@ export function createServer(db: D1Database, me: Member, files?: McpFiles) {
       agent_url: z.string().max(500).nullable().optional().describe("https URL; null or an empty string clears it"),
       status: z.string().max(64).nullable().optional().describe("agent status reported by the bot; null clears it") },
     (a) => core.setAgent(db, me, a));
-  tool("add_note", "Record progress without changing status (clears STALE).",
+  tool("add_note", "Record progress without changing status (clears STALE). The assignee, the task's reviewer, or a pm/po/lead/admin.",
     { task: taskCode, note: z.string().max(core.NOTE_MAX), links: z.array(z.string()).max(10).optional() },
     (a) => core.addNote(db, me, a));
   tool("set_blocker", "Open a blocker and move the task to blocked. waiting_on is an existing member id or a configured owner/approver id. kind: need_info, dependency, access, bug. need_approval is rejected; waiting for approval is the pending_approval status. A pending_approval task cannot take a blocker.",
