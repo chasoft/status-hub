@@ -75,7 +75,7 @@ export function canTransition(from: Status, to: Status): boolean {
 
 export const NOTE_MAX = 500;
 
-function clipNote(note: string | undefined | null): string | null {
+export function clipNote(note: string | undefined | null): string | null {
   if (note == null) return null;
   const n = note.trim();
   if (n.length > NOTE_MAX) throw new AppError("BAD_REQUEST", `note tối đa ${NOTE_MAX} ký tự`);
@@ -137,8 +137,170 @@ export async function getTaskRow(db: D1Database, code: string): Promise<TaskRow>
   return t;
 }
 
-function canTouchTask(m: Member, t: TaskRow) {
+export function canEditTask(m: Member, t: { assignee_id: string | null }) {
   return isLeader(m) || t.assignee_id === m.id;
+}
+function canTouchTask(m: Member, t: TaskRow) {
+  return canEditTask(m, t);
+}
+
+export const REQUEST_MAX = 50_000;
+
+export interface OutputRef {
+  attachments: { id: number; name: string; version: number }[];
+  links: string[];
+}
+
+export interface RequestVersionMeta {
+  version: number;
+  author_id: string;
+  at: number;
+  note: string | null;
+}
+
+function cleanRequestBody(markdown: string): string {
+  const body = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!body) throw new AppError("BAD_REQUEST", "request markdown is empty");
+  if (body.length > REQUEST_MAX) throw new AppError("BAD_REQUEST", `request markdown is longer than ${REQUEST_MAX} characters`);
+  return body;
+}
+
+/** Insert a new request version. Previous rows are left as they were. */
+export async function setRequestDocument(db: D1Database, actor: Member, p: {
+  task: string; markdown: string; note?: string | null;
+}, now = Date.now()) {
+  const t = await getTaskRow(db, p.task);
+  if (!canEditTask(actor, t)) throw new AppError("FORBIDDEN", "chỉ người được giao (hoặc pm/po/lead/admin) được sửa task này");
+  const body = cleanRequestBody(p.markdown);
+  const note = clipNote(p.note);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const cur = await db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM request_versions WHERE task_code = ?")
+      .bind(t.code).first<{ v: number }>();
+    const version = (cur?.v ?? 0) + 1;
+    try {
+      await db.prepare(
+        "INSERT INTO request_versions (task_code, version, body, author_id, created_at, note) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(t.code, version, body, actor.id, now, note).run();
+      return { task: t.code, version, author_id: actor.id, at: now, note, markdown: body };
+    } catch (err) {
+      if (attempt === 0 && /UNIQUE|constraint/i.test(String(err))) continue;
+      throw err;
+    }
+  }
+  throw new AppError("CONFLICT", "could not store the request version");
+}
+
+export async function getRequestDocument(db: D1Database, task: string, version?: number | null) {
+  if (!TASK_RE.test(task)) throw new AppError("BAD_REQUEST", "mã task không hợp lệ");
+  await getTaskRow(db, task);
+  if (version != null && (!Number.isInteger(version) || version < 1)) {
+    throw new AppError("BAD_REQUEST", "version must be a positive integer");
+  }
+  const listed = await db.prepare(
+    "SELECT version, author_id, created_at, note FROM request_versions WHERE task_code = ? ORDER BY version DESC",
+  ).bind(task).all<{ version: number; author_id: string; created_at: number; note: string | null }>();
+  const versions: RequestVersionMeta[] = listed.results.map((row) => ({
+    version: row.version, author_id: row.author_id, at: row.created_at, note: row.note,
+  }));
+  const latest = versions[0]?.version ?? null;
+  const wanted = version ?? latest;
+  if (wanted == null) {
+    return { task, version: null, latest: null, markdown: null, author_id: null, at: null, note: null, versions };
+  }
+  const row = await db.prepare(
+    "SELECT version, body, author_id, created_at, note FROM request_versions WHERE task_code = ? AND version = ?",
+  ).bind(task, wanted).first<{ version: number; body: string; author_id: string; created_at: number; note: string | null }>();
+  if (!row) throw new AppError("NOT_FOUND", `request version ${wanted} was not found`);
+  return {
+    task, version: row.version, latest, markdown: row.body, author_id: row.author_id,
+    at: row.created_at, note: row.note, versions,
+  };
+}
+
+export async function reviewSnapshot(db: D1Database, task: string, extraLinks: string[] = []): Promise<OutputRef & { request_version: number | null }> {
+  const [atts, links, req] = await db.batch([
+    db.prepare(
+      `SELECT a.id, a.name, v.version FROM attachments a
+       JOIN attachment_versions v ON v.attachment_id = a.id
+       WHERE a.task_code = ? AND a.grp = 'output'
+         AND v.version = (SELECT MAX(version) FROM attachment_versions WHERE attachment_id = a.id)
+       ORDER BY a.name`,
+    ).bind(task),
+    db.prepare("SELECT url FROM output_links WHERE task_code = ? ORDER BY id").bind(task),
+    db.prepare("SELECT MAX(version) AS v FROM request_versions WHERE task_code = ?").bind(task),
+  ]);
+  const seen = new Set<string>();
+  const allLinks: string[] = [];
+  for (const url of [
+    ...(links.results as { url: string }[]).map((row) => row.url),
+    ...extraLinks,
+  ]) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      allLinks.push(url);
+    }
+  }
+  return {
+    request_version: (req.results[0] as { v: number | null } | undefined)?.v ?? null,
+    attachments: atts.results as { id: number; name: string; version: number }[],
+    links: allLinks,
+  };
+}
+
+export function outputRefJson(ref: OutputRef): string {
+  return JSON.stringify({ attachments: ref.attachments, links: ref.links });
+}
+
+export async function addOutputLink(db: D1Database, actor: Member, p: { task: string; url: string; note?: string | null }, now = Date.now()) {
+  const t = await getTaskRow(db, p.task);
+  if (!canEditTask(actor, t)) throw new AppError("FORBIDDEN", "chỉ người được giao (hoặc pm/po/lead/admin) được sửa task này");
+  const url = assertHttpUrl(p.url, "output link");
+  const note = clipNote(p.note);
+  const res = await db.prepare(
+    "INSERT INTO output_links (task_code, url, author_id, created_at, note) VALUES (?, ?, ?, ?, ?) RETURNING id",
+  ).bind(t.code, url, actor.id, now, note).run();
+  const id = (res.results[0] as { id: number } | undefined)?.id;
+  return { id, task: t.code, url, at: now, note };
+}
+
+export interface AttachmentSummaryItem {
+  id: number;
+  name: string;
+  version_count: number;
+  latest_version: number;
+  mime: string;
+  bytes: number;
+}
+
+export async function attachmentSummary(db: D1Database, task: string): Promise<{
+  requirement: AttachmentSummaryItem[];
+  output: AttachmentSummaryItem[];
+  output_links: { id: number; url: string; at: number; note: string | null }[];
+}> {
+  const [rows, links] = await db.batch([
+    db.prepare(
+      `SELECT a.id, a.grp, a.name, COUNT(v.version) AS version_count, MAX(v.version) AS latest_version,
+              (SELECT mime FROM attachment_versions WHERE attachment_id = a.id ORDER BY version DESC LIMIT 1) AS mime,
+              (SELECT bytes FROM attachment_versions WHERE attachment_id = a.id ORDER BY version DESC LIMIT 1) AS bytes
+       FROM attachments a JOIN attachment_versions v ON v.attachment_id = a.id
+       WHERE a.task_code = ? GROUP BY a.id ORDER BY a.grp, a.name`,
+    ).bind(task),
+    db.prepare("SELECT id, url, created_at, note FROM output_links WHERE task_code = ? ORDER BY id").bind(task),
+  ]);
+  const grouped: { requirement: AttachmentSummaryItem[]; output: AttachmentSummaryItem[] } = { requirement: [], output: [] };
+  for (const row of rows.results as {
+    id: number; grp: "requirement" | "output"; name: string; version_count: number; latest_version: number; mime: string; bytes: number;
+  }[]) {
+    grouped[row.grp].push({
+      id: row.id, name: row.name, version_count: row.version_count, latest_version: row.latest_version, mime: row.mime, bytes: row.bytes,
+    });
+  }
+  return {
+    ...grouped,
+    output_links: (links.results as { id: number; url: string; created_at: number; note: string | null }[]).map((row) => ({
+      id: row.id, url: row.url, at: row.created_at, note: row.note,
+    })),
+  };
 }
 
 // ---------- status periods (time-in-status)
@@ -325,7 +487,7 @@ function resolveCreateStatus(actor: Member, requested: Status | undefined, reque
 
 export async function createTask(db: D1Database, actor: Member, p: {
   feature: string; title: string; assignee?: string; due_at?: number; status?: Status;
-  pr_url?: string | null; links?: string[];
+  pr_url?: string | null; links?: string[]; request?: string | null;
 } & TaskRequest, now = Date.now()) {
   const f = await db.prepare("SELECT code, project_code FROM features WHERE code = ?").bind(p.feature)
     .first<{ code: string; project_code: string }>();
@@ -338,6 +500,7 @@ export async function createTask(db: D1Database, actor: Member, p: {
   const note = status === "pending_approval"
     ? (p.assignee ? `tạo task chờ duyệt, đề xuất giao ${p.assignee}` : "tạo task chờ duyệt")
     : (p.assignee ? `giao cho ${p.assignee}` : "tạo task");
+  const requestMd = p.request?.trim() ? cleanRequestBody(p.request) : "";
   const scope = `T:${f.code}`;
   const res = await db.batch([
     db.prepare("INSERT OR IGNORE INTO counters (scope, next) VALUES (?, 0)").bind(scope),
@@ -357,9 +520,13 @@ export async function createTask(db: D1Database, actor: Member, p: {
       `INSERT INTO status_periods (task_code, status, started_at, member_id)
        SELECT ? || '.' || next, ?, ?, ? FROM counters WHERE scope = ?`,
     ).bind(f.code, status, now, actor.id, scope),
+    ...(requestMd ? [db.prepare(
+      `INSERT INTO request_versions (task_code, version, body, author_id, created_at, note)
+       SELECT ? || '.' || next, 1, ?, ?, ?, NULL FROM counters WHERE scope = ?`,
+    ).bind(f.code, requestMd, actor.id, now, scope)] : []),
   ]);
   const n = (res[1].results[0] as { next: number }).next;
-  return { code: `${f.code}.${n}`, status, pr_url: pr };
+  return { code: `${f.code}.${n}`, status, pr_url: pr, request_version: requestMd ? 1 : null };
 }
 
 /**
@@ -513,6 +680,16 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
     closeNeedApproval = t.status === "blocked" && open.results.some((b) => b.kind === "need_approval");
   }
   const pr = pullLink(links);
+  let requestVersion: number | null = null;
+  let outputRef: string | null = null;
+  if (p.status === "review") {
+    const snap = await reviewSnapshot(db, t.code, links);
+    if (snap.attachments.length === 0 && snap.links.length === 0) {
+      throw new AppError("BAD_REQUEST", "Moving to review requires an output attachment or an output link.");
+    }
+    requestVersion = snap.request_version;
+    outputRef = outputRefJson(snap);
+  }
   await db.batch([
     ...(closeNeedApproval ? [db.prepare(
       `UPDATE blockers SET resolved_at = ?, resolved_by = ?, resolution = 'chuyển sang pending_approval'
@@ -527,8 +704,8 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
          reviewer_id = COALESCE(?, reviewer_id)
        WHERE code = ?`,
     ).bind(p.status, now, p.status, now, p.status, now, p.status, now, pr, reviewerId, t.code),
-    db.prepare(`INSERT INTO updates (task_code, member_id, at, status_from, status_to, note, links, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(t.code, actor.id, now, t.status, p.status, note, links.length ? JSON.stringify(links) : null, approvedBy),
+    db.prepare(`INSERT INTO updates (task_code, member_id, at, status_from, status_to, note, links, approved_by, request_version, output_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(t.code, actor.id, now, t.status, p.status, note, links.length ? JSON.stringify(links) : null, approvedBy, requestVersion, outputRef),
     clearStale(db, t.code, now),
     ...periodStmts(db, t.code, p.status, actor.id, now),
   ]);
@@ -690,24 +867,44 @@ export async function addLeadershipFeedback(db: D1Database, p: {
   await getTaskRow(db, p.task);
   const note = clipNote(p.note);
   if (!note) throw new AppError("BAD_REQUEST", "note trống");
-  await db.prepare("INSERT INTO feedback (task_code, author, note, at) VALUES (?, ?, ?, ?)").bind(p.task, p.author, note, now).run();
-  return { code: p.task, author: p.author, at: now };
+  const snap = await reviewSnapshot(db, p.task, []);
+  await db.prepare(
+    "INSERT INTO feedback (task_code, author, note, at, request_version, output_ref) VALUES (?, ?, ?, ?, ?, ?)",
+  ).bind(p.task, p.author, note, now, snap.request_version, outputRefJson(snap)).run();
+  return { code: p.task, author: p.author, at: now, request_version: snap.request_version, output_ref: outputRefJson(snap) };
 }
 
-interface FeedbackRow { id: number; author: string; note: string; at: number; read_by: string | null }
+interface FeedbackRow {
+  id: number; author: string; note: string; at: number; read_by: string | null;
+  request_version: number | null; output_ref: string | null;
+}
+
+function parseOutputRef(raw: string | null): OutputRef | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as OutputRef;
+    if (!parsed || !Array.isArray(parsed.attachments) || !Array.isArray(parsed.links)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 export async function getTask(db: D1Database, code: string, now = Date.now(), reader?: Pick<Member, "id"> | null) {
   const t = await getTaskRow(db, code);
   const [u, b, a, sp, fb] = await db.batch([
-    db.prepare("SELECT member_id, at, status_from, status_to, note, links, approved_by FROM updates WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 10").bind(code),
+    db.prepare("SELECT member_id, at, status_from, status_to, note, links, approved_by, request_version, output_ref FROM updates WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 10").bind(code),
     db.prepare("SELECT id, kind, waiting_on, detail, opened_at, resolved_at FROM blockers WHERE task_code = ? ORDER BY opened_at DESC LIMIT 10").bind(code),
     db.prepare("SELECT rule, fired_at FROM alerts WHERE task_code = ? AND cleared_at IS NULL").bind(code),
     db.prepare("SELECT id, status, started_at, ended_at, member_id FROM status_periods WHERE task_code = ? ORDER BY started_at, id").bind(code),
-    db.prepare("SELECT id, author, note, at, read_by FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 20").bind(code),
+    db.prepare("SELECT id, author, note, at, read_by, request_version, output_ref FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 20").bind(code),
   ]);
   const rows = fb.results as unknown as FeedbackRow[];
   const unread = (readBy: string | null) => readBy !== t.assignee_id || t.assignee_id === null;
-  const feedback = rows.map((r) => ({ id: r.id, author: r.author, note: r.note, at: r.at, unread: unread(r.read_by) }));
+  const feedback = rows.map((r) => ({
+    id: r.id, author: r.author, note: r.note, at: r.at, unread: unread(r.read_by),
+    request_version: r.request_version ?? null, output_ref: parseOutputRef(r.output_ref),
+  }));
   // Only the current assignee's read clears the flag. Return the marker from before that write.
   if (reader && t.assignee_id && reader.id === t.assignee_id && rows.some((r) => unread(r.read_by))) {
     await db.prepare(
@@ -715,8 +912,19 @@ export async function getTask(db: D1Database, code: string, now = Date.now(), re
     ).bind(now, reader.id, code, reader.id).run();
   }
   const periods = summarizePeriods(sp.results as unknown as PeriodRow[], now);
+  const request = await getRequestDocument(db, code);
+  const attachments = await attachmentSummary(db, code);
+  const updates = (u.results as Record<string, unknown>[]).map((row) => ({
+    ...row,
+    output_ref: parseOutputRef(typeof row.output_ref === "string" ? row.output_ref : null),
+  }));
   return { task: t, current_status: periods.current, time_in_status: periods.totals, periods: periods.timeline,
-    updates: u.results, blockers: b.results, alerts: a.results, feedback };
+    updates, blockers: b.results, alerts: a.results, feedback,
+    request: request.version == null ? null : {
+      version: request.version, latest: request.latest, author_id: request.author_id, at: request.at,
+      note: request.note, markdown: request.markdown,
+    },
+    attachments };
 }
 
 export async function projectOverview(db: D1Database, code: string) {

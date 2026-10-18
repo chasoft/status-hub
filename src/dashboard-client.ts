@@ -108,7 +108,29 @@ export const DASHBOARD_JS = `
     if (editor) editor.hidden = false;
     const field = form.querySelector("input, select, textarea");
     if (field instanceof HTMLElement) field.focus();
+    if (form.getAttribute("data-inline-kind") === "markdown" && field instanceof HTMLTextAreaElement) schedulePreview(form, field.value);
   }
+  let previewTimer = 0;
+  function schedulePreview(form, value) {
+    const slot = form.querySelector("[data-md-preview]");
+    const url = form.getAttribute("data-preview");
+    if (!slot || !url) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      const data = new FormData();
+      data.set("body", value);
+      fetch(url, { method: "POST", body: data, headers: { accept: "application/json" } })
+        .then((res) => res.json())
+        .then((payload) => { if (payload && typeof payload.html === "string") slot.innerHTML = payload.html; })
+        .catch(() => {});
+    }, 180);
+  }
+  document.addEventListener("input", (event) => {
+    const field = event.target;
+    if (!(field instanceof HTMLTextAreaElement)) return;
+    const form = field.closest("[data-inline-kind='markdown']");
+    if (form) schedulePreview(form, field.value);
+  });
 
   function storageGet(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -615,7 +637,7 @@ export const DASHBOARD_JS = `
       if (form) form.requestSubmit();
       return;
     }
-    if (event.target instanceof HTMLTextAreaElement && event.target.closest(".feedback-dock") && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (event.target instanceof HTMLTextAreaElement && event.key === "Enter" && (event.metaKey || event.ctrlKey) && (event.target.closest(".feedback-dock") || event.target.closest("[data-inline-kind='markdown']"))) {
       event.preventDefault();
       const form = event.target.form;
       if (form) form.requestSubmit();
@@ -713,12 +735,22 @@ export const DASHBOARD_JS = `
       event.preventDefault();
       const field = form.querySelector("input, select, textarea");
       const msg = form.querySelector(".ie-msg");
+      const markdown = form.getAttribute("data-inline-kind") === "markdown";
       form.classList.add("is-saving");
       if (msg) msg.textContent = "Saving…";
       fetch(form.action, { method: "POST", body: new FormData(form), headers: { accept: "application/json" } })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || "Could not save");
+          if (markdown) {
+            const next = new URL(location.href);
+            next.searchParams.set("tab", "overview");
+            next.searchParams.delete("rv");
+            next.searchParams.delete("diff");
+            next.searchParams.delete("fragment");
+            location.assign(next.pathname + "?" + next.searchParams.toString());
+            return;
+          }
           const value = field && "value" in field ? String(field.value) : "";
           if (field) field.setAttribute("data-original", value);
           paintValue(form, value.trim());

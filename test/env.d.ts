@@ -3,6 +3,9 @@ declare global {
   namespace Cloudflare {
     interface Env {
       DB: D1Database;
+      ATTACHMENTS: R2Bucket;
+      ATTACHMENT_MAX_BYTES?: string;
+      ATTACHMENT_ALLOWED_MIME?: string;
       UI_HOST: string;
       MCP_HOST: string;
       OWNER_IDS?: string;

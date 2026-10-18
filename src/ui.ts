@@ -1,9 +1,12 @@
 // Server-rendered dashboard. Behaviour lives in /assets/dashboard.js (no inline handlers).
 import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
-import { isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type PeriodRow, type Status } from "./core";
+import { isImageMime, listAttachments } from "./attachments";
+import { attachmentSummary, getRequestDocument, isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type OutputRef, type PeriodRow, type Status } from "./core";
+import { diffLines } from "./diff";
 import { featurePalette, paletteStyle } from "./feature-color";
 import { clusterByFeature, isSortKey, sortTasks, type SortDir, type SortKey } from "./groups";
+import { renderMarkdown, REQUEST_TEMPLATE } from "./markdown";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -258,6 +261,31 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .ie-msg:empty{display:none}
 .inline-edit.is-saving .ie-msg{color:var(--mut)}
 .ie-value{min-width:0;overflow-wrap:anywhere}
+.request-doc{margin:0 0 16px}
+.request-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 8px}
+.request-bar h3{margin:0}
+.request-meta{color:var(--mut);font-size:12px}
+.request-pick{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:0}
+.request-pick select,.request-pick button,.attach-form input,.attach-form button{padding:5px 8px;border-radius:var(--radius)}
+.request-edit{width:100%;align-items:stretch}
+.request-edit .ie-view,.request-edit .ie-form{align-items:flex-start;width:100%}
+.request-edit .ie-form{flex-direction:column}
+.request-edit textarea{width:100%;min-height:12rem;max-width:none;padding:8px}
+.md-preview{width:100%;border:1px dashed var(--bd);border-radius:var(--radius);padding:8px;background:var(--card)}
+.md :is(h1,h2,h3,h4){margin:.7em 0 .3em;line-height:1.25}
+.md p,.md ul,.md ol,.md blockquote{margin:.4em 0}
+.md pre{overflow:auto;background:var(--cell);padding:8px;border-radius:var(--radius)}
+.md code{font:12px ui-monospace,monospace}
+.md blockquote{border-left:3px solid var(--bd);padding-left:8px;color:var(--mut)}
+.md hr{border:0;border-top:1px solid var(--bd)}
+.attach-groups{display:flex;flex-direction:column;gap:14px;margin:0 0 16px}
+.attach-group h3{margin:0 0 6px}
+.attach-preview{display:block;max-width:min(100%,360px);max-height:220px;object-fit:contain;border:1px solid var(--bd);border-radius:var(--radius);background:var(--cell);margin-top:6px}
+.attach-form{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:8px}
+.diff-line{display:flex;gap:8px;font:12px ui-monospace,monospace;white-space:pre-wrap;padding:0 4px}
+.diff-add{background:#e7f6ec}
+.diff-del{background:#fdeceb}
+.diff-mark{width:1ch;flex:none}
 [popover]{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:12px;box-shadow:var(--shadow);max-width:min(360px,calc(100vw - 24px));max-height:min(70dvh,520px);overflow:auto}
 .quick{list-style:none;margin:8px 0;padding:0}
 .quick a{display:flex;justify-content:space-between;gap:8px;padding:4px 0;color:var(--tx)}
@@ -292,6 +320,8 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
   .lead{background:#2a2418}
   .pill-unread{color:#9ec1ff}
   .group,.fg{--fg:var(--fg-bg-dark);--fg-line:var(--fg-bd-dark)}
+  .diff-add{background:#143024}
+  .diff-del{background:#3a1c1c}
 }
 `;
 
@@ -842,7 +872,25 @@ function taskPanel(id: TaskTab, active: TaskTab, body: string): string {
   return `<section role="tabpanel" id="panel-${id}" class="task-panel${on ? " is-on" : ""}" data-tab-panel="${id}" aria-labelledby="tab-${id}"${on ? "" : " hidden"}>${body}</section>`;
 }
 
-async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null): Promise<string | null> {
+function appliesLabel(version: unknown, raw: unknown): string {
+  const parts: string[] = [];
+  parts.push(version != null && version !== "" ? `Request v${esc(version)}` : "No request version");
+  let ref: OutputRef | null = null;
+  if (typeof raw === "string" && raw) {
+    try { ref = JSON.parse(raw) as OutputRef; } catch { ref = null; }
+  } else if (raw && typeof raw === "object") ref = raw as OutputRef;
+  const files = (ref?.attachments ?? []).map((item) => `${esc(item.name)} v${esc(item.version)}`);
+  const links = (ref?.links ?? []).filter((item) => typeof item === "string").map((item) => externalAnchor(item));
+  const rest = [...files, ...links];
+  if (rest.length) parts.push(rest.join(", "));
+  return parts.join(" · ");
+}
+
+function versionOptions(versions: { version: number; author_id: string; at: number }[], selected: number | null, tz: number): string {
+  return versions.map((item) => `<option value="${item.version}"${item.version === selected ? " selected" : ""}>v${item.version} · ${esc(item.author_id)} · ${fmt(item.at, tz)}</option>`).join("");
+}
+
+async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL): Promise<string | null> {
   const t = await db.prepare(`${CARD_SQL} WHERE t.code = ?`).bind(code).first<CardRow>();
   if (!t) return null;
   const full = await db.prepare("SELECT * FROM tasks WHERE code = ?").bind(code).first<Record<string, unknown>>();
@@ -851,7 +899,7 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
     db.prepare("SELECT * FROM updates WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
     db.prepare("SELECT * FROM blockers WHERE task_code = ? ORDER BY opened_at DESC").bind(code),
     db.prepare("SELECT id, status, started_at, ended_at, member_id FROM status_periods WHERE task_code = ? ORDER BY started_at, id").bind(code),
-    db.prepare("SELECT id, author, note, at, read_by FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
+    db.prepare("SELECT id, author, note, at, read_by, request_version, output_ref FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
     db.prepare("SELECT id FROM members WHERE active = 1 ORDER BY id"),
   ]);
   const tz = (await loadSettings(db)).tz_offset_minutes;
@@ -875,7 +923,7 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
   const updates = (u.results as Record<string, unknown>[]).map((x) => ({
     at: Number(x.at), id: Number(x.id), who: String(x.member_id),
     status: `${x.status_from ?? ""} → ${x.status_to ?? ""}`,
-    note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}${x.links ? `<br>${linkList(String(x.links))}` : ""}`,
+    note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}${x.request_version != null || x.output_ref ? `<div class="muted">${appliesLabel(x.request_version, x.output_ref)}</div>` : ""}${x.links ? `<br>${linkList(String(x.links))}` : ""}`,
     links: x.links,
   }));
   let linkValue = "";
@@ -892,21 +940,82 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
   const linkDisplay = linkValue.split(/\s+/).filter(Boolean).map((href) => externalAnchor(href)).join("<br>") || "";
   const feedback = (fb.results as Record<string, unknown>[]).map((x) => ({
     at: Number(x.at), who: String(x.author), note: esc(x.note),
+    applies: appliesLabel(x.request_version, x.output_ref),
     unread: x.read_by == null || String(x.read_by) === "" || String(x.read_by) !== (row.assignee_id ?? ""),
   }));
   const unread = feedback.filter((x) => x.unread).length;
   const author = leadershipAuthor(email);
   const feedbackForm = author ? `<form method="post" action="/t/${esc(code)}/feedback" class="feedback-dock"><textarea name="note" maxlength="500" required rows="1" aria-label="Leadership feedback"></textarea><button type="submit">Send</button></form>` : "";
-  const feedbackTable = `<table><thead><tr><th>When</th><th>Who</th><th>Note</th></tr></thead><tbody>${feedback.map((x) => `<tr class="lead"><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${x.note}</td></tr>`).join("") || `<tr><td colspan="3">—</td></tr>`}</tbody></table>`;
+  const feedbackTable = `<table><thead><tr><th>When</th><th>Who</th><th>Note</th><th>Applies to</th></tr></thead><tbody>${feedback.map((x) => `<tr class="lead"><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${x.note}</td><td>${x.applies}</td></tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}</tbody></table>`;
   const reqLink = full.request_link ? externalAnchor(String(full.request_link)) : "Not set";
   const prValue = full.pr_url ? String(full.pr_url) : "";
   const dueValue = dueInputValue(full.due_at as number | null, tz);
   const reviewerValue = full.reviewer_id ? String(full.reviewer_id) : "";
   const assigneeValue = row.assignee_id ?? "";
   const active = taskTabOf(tab);
+  const doc = await getRequestDocument(db, code);
+  const rvRaw = pageUrl?.searchParams.get("rv");
+  const diffRaw = pageUrl?.searchParams.get("diff");
+  let shown = doc;
+  if (rvRaw && Number.isInteger(Number(rvRaw))) {
+    try { shown = await getRequestDocument(db, code, Number(rvRaw)); } catch { shown = doc; }
+  }
+  const requestError = fieldError("request_body");
+  const requestDraft = requestError ? (notice?.value ?? "") : (shown.markdown ?? REQUEST_TEMPLATE);
+  let requestView = shown.markdown ? renderMarkdown(shown.markdown) : `<p class="empty">No request yet.</p>`;
+  if (diffRaw && shown.markdown != null && Number.isInteger(Number(diffRaw))) {
+    try {
+      const other = await getRequestDocument(db, code, Number(diffRaw));
+      if (other.markdown != null) {
+        const lines = diffLines(other.markdown, shown.markdown);
+        requestView = `<div class="diff" aria-label="Request diff">${lines.map((line) => `<div class="diff-line diff-${line.kind}"><span class="diff-mark">${line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}</span><span>${esc(line.text) || " "}</span></div>`).join("")}</div>`;
+      }
+    } catch { /* keep the rendered version */ }
+  }
+  const versionPicker = doc.versions.length ? `<form method="get" class="request-pick" action="${esc(action)}">
+<input type="hidden" name="tab" value="overview">
+<label>Version <select name="rv" aria-label="Request version">${versionOptions(doc.versions, shown.version, tz)}</select></label>
+<label>Diff with <select name="diff" aria-label="Diff with version"><option value="">None</option>${versionOptions(doc.versions, diffRaw && Number.isInteger(Number(diffRaw)) ? Number(diffRaw) : null, tz)}</select></label>
+<button type="submit">Show</button></form>` : "";
+  const requestMeta = shown.version ? `<span class="request-meta">v${shown.version} · ${esc(shown.author_id)} · ${fmt(shown.at, tz)}${shown.note ? ` · ${esc(shown.note)}` : ""}</span>` : `<span class="request-meta">No versions yet</span>`;
+  const requestEditor = canEdit
+    ? `<form class="inline-edit request-edit${requestError ? " is-editing" : ""}" method="post" action="${esc(action)}" data-inline-edit data-inline-kind="markdown" data-preview="/t/${encodeURIComponent(code)}/request-preview" novalidate>
+<span class="ie-view"${requestError ? " hidden" : ""}><span class="ie-value">${requestView}</span><button type="button" class="ie-pen" data-inline-open aria-label="Edit request">${ICON_PEN}</button></span>
+<span class="ie-form"${requestError ? "" : " hidden"}><textarea name="request_body" data-original="${esc(shown.markdown ?? REQUEST_TEMPLATE)}" aria-label="Request markdown">${esc(requestDraft)}</textarea>
+<label>Change note <input name="request_note" maxlength="500" aria-label="Change note" placeholder="What changed"></label>
+<div class="md md-preview" data-md-preview></div>
+<button type="submit" class="ie-save" aria-label="Save request">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel request">${ICON_X}</button></span>
+<span class="ie-msg" role="status">${requestError ? esc(requestError) : ""}</span></form>`
+    : requestView;
+  const requestBlock = `<section class="request-doc" id="request"><div class="request-bar"><h3>Request</h3>${requestMeta}${versionPicker}</div>${requestEditor}</section>`;
+  const files = attachmentsEnabled ? await listAttachments(db, code) : { requirement: [], output: [] };
+  const links = (await attachmentSummary(db, code)).output_links;
+  const fileLink = (id: number, version: number, label: string) => `<a href="/t/${encodeURIComponent(code)}/attachments/${id}?v=${version}">${esc(label)}</a>`;
+  const historyTableFor = (item: { id: number; versions: { version: number; mime: string; bytes: number; author_id: string; at: number; note: string | null }[] }) => `<details open><summary>History (${item.versions.length})</summary><table><thead><tr><th>Version</th><th>Type</th><th>Bytes</th><th>By</th><th>When</th><th>Note</th></tr></thead><tbody>${item.versions.map((v) => `<tr><td>${fileLink(item.id, v.version, `v${v.version}`)}</td><td>${esc(v.mime)}</td><td>${v.bytes}</td><td>${esc(v.author_id)}</td><td>${fmt(v.at, tz)}</td><td>${esc(v.note ?? "")}</td></tr>`).join("")}</tbody></table></details>`;
+  const groupHtml = (title: string, group: "requirement" | "output", items: typeof files.requirement) => {
+    const rows = items.map((item) => `<tr><td>${esc(item.name)}</td><td>${fileLink(item.id, item.latest.version, `v${item.latest.version}`)}</td><td>${esc(item.latest.mime)}</td><td>${item.latest.bytes}</td><td>${esc(item.latest.author_id)}</td><td>${fmt(item.latest.at, tz)}</td></tr>${isImageMime(item.latest.mime) ? `<tr><td colspan="6"><img class="attach-preview" src="/t/${encodeURIComponent(code)}/attachments/${item.id}?v=${item.latest.version}" alt="${esc(item.name)}"></td></tr>` : ""}<tr><td colspan="6">${historyTableFor(item)}</td></tr>`).join("");
+    const upload = canEdit && attachmentsEnabled ? `<form method="post" action="/t/${encodeURIComponent(code)}/attachments" enctype="multipart/form-data" class="attach-form">
+<input type="hidden" name="group" value="${group}">
+<label>Name <input name="name" required maxlength="200" aria-label="${esc(title)} name"></label>
+<label>File <input type="file" name="file" required aria-label="${esc(title)} file"></label>
+<label>Note <input name="note" maxlength="500" aria-label="${esc(title)} note"></label>
+<button type="submit">Upload</button></form>` : "";
+    const linkForm = group === "output" && canEdit ? `<form method="post" action="/t/${encodeURIComponent(code)}/output-link" class="attach-form">
+<label>Output link <input type="url" name="url" required placeholder="https://" aria-label="Output link" value="${esc(fieldError("output_link") ? notice?.value ?? "" : "")}"></label>
+<label>Note <input name="note" maxlength="500" aria-label="Output link note"></label>
+<button type="submit">Add link</button></form>` : "";
+    const linkRows = group === "output" ? links.map((item) => `<li>${externalAnchor(item.url)}${item.note ? ` · ${esc(item.note)}` : ""}</li>`).join("") : "";
+    const empty = !attachmentsEnabled && group === "output" ? "No output links." : `No ${title.toLowerCase()} files.`;
+    const fileTable = items.length
+      ? `<table><thead><tr><th>Name</th><th>Latest</th><th>Type</th><th>Bytes</th><th>By</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
+      : (group === "output" && links.length && !attachmentsEnabled ? "" : `<p class="empty">${esc(empty)}</p>`);
+    return `<section class="attach-group"><h3>${esc(title)}</h3>${fileTable}${upload}${linkRows ? `<ul class="attach-links">${linkRows}</ul>` : ""}${linkForm}</section>`;
+  };
+  const attachError = fieldError("attachment") || fieldError("output_link");
+  const attachmentsBlock = `<section class="attach-groups" id="attachments">${attachError ? `<p class="flag">${esc(attachError)}</p>` : ""}${attachmentsEnabled ? groupHtml("Requirement", "requirement", files.requirement) + groupHtml("Output", "output", files.output) : groupHtml("Output links", "output", [])}</section>`;
   const overviewBadge = unread ? ` <span class="count is-on">${unread}</span>` : "";
   const fieldRow = (label: string, value: string) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
-  const overview = `<div class="tab-scroll"><h2>${esc(code)}</h2>
+  const overview = `<div class="tab-scroll">${requestBlock}${attachmentsBlock}<h2>${esc(code)}</h2>
 <table class="fields"><tbody>
 ${fieldRow("Title", esc(row.title))}
 ${fieldRow("Status", badge(row.status))}
@@ -936,8 +1045,8 @@ ${taskPanel("blockers", active, sheet("h3", "Blockers", blockerTable))}
 </div>`;
 }
 
-export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null) {
-  const detail = await taskDetail(db, code, email, now, notice, tab);
+export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL) {
+  const detail = await taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl);
   if (!detail) return null;
   const task = await db.prepare("SELECT project_code FROM tasks WHERE code = ?").bind(code).first<{ project_code: string }>();
   const url = new URL(`https://local/?project=${encodeURIComponent(task?.project_code ?? "")}`);
@@ -946,8 +1055,8 @@ export async function renderTask(db: D1Database, code: string, email: string, no
   return shell(code, `<p class="back"><a href="${esc(back)}">Back to board</a></p>${detail}`, email, chrome, "task", false);
 }
 
-export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null) {
-  return taskDetail(db, code, email, now, notice, tab);
+export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null, attachmentsEnabled = false, pageUrl?: URL) {
+  return taskDetail(db, code, email, now, notice, tab, attachmentsEnabled, pageUrl);
 }
 
 export async function renderProject(db: D1Database, code: string, email: string) {

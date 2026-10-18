@@ -32,7 +32,8 @@
     // Ignored for AUTH_MODE=access.
     // UI_HOST: hostname of the Kanban UI. Must match the UI custom domain above.
     "UI_HOST": "status.example.com",
-    // MCP_HOST: hostname of the MCP server. Must match the MCP custom domain. Only /mcp is served.
+    // MCP_HOST: hostname of the MCP server. Must match the MCP custom domain.
+    // Serves /mcp and POST /attachment-uploads/:token. Any other path is 404.
     "MCP_HOST": "mcp.example.com",
     // ORG_NAME: text shown in the UI header.
     "ORG_NAME": "Status Hub",
@@ -62,7 +63,17 @@
     // stale_work_start_hour=8, stale_work_end_hour=22, blocked_hours=2, tz_offset_minutes=0 (UTC).
     // NOT_STARTED_MINUTES, STALE_HOURS, STALE_WORK_START_HOUR, STALE_WORK_END_HOUR,
     // BLOCKED_HOURS, TZ_OFFSET_MINUTES (minutes east of UTC).
+    // ATTACHMENT_MAX_BYTES: optional max upload size in bytes. Default 10485760. Values above 26214400 are capped.
+    // ATTACHMENT_ALLOWED_MIME: optional comma-separated MIME allowlist. When unset, png, jpeg, gif, webp,
+    // pdf, text/plain, text/markdown, text/csv, json, video/mp4, and video/webm are allowed.
   },
+  // Optional R2 binding for task attachments. Leave it commented to hide file uploads.
+  // The Worker reads binding name ATTACHMENTS. Downloads stay on the UI host; the bucket is not public.
+  // Create it once, then uncomment:
+  //   pnpm exec wrangler r2 bucket create status-hub-attachments
+  // "r2_buckets": [
+  //   { "binding": "ATTACHMENTS", "bucket_name": "status-hub-attachments" }
+  // ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -100,7 +111,13 @@
         "APPROVER_IDS": "",
         "UI_MEMBER_EMAILS": "you@example.com=admin",
         "LEADERSHIP_AUTHORS": "you@example.com=Owner"
+        // ATTACHMENT_MAX_BYTES and ATTACHMENT_ALLOWED_MIME: same optional overrides as production.
       },
+      // Optional, separate from production. Uncomment after creating the staging bucket:
+      //   pnpm exec wrangler r2 bucket create status-hub-attachments-staging
+      // "r2_buckets": [
+      //   { "binding": "ATTACHMENTS", "bucket_name": "status-hub-attachments-staging" }
+      // ],
       "d1_databases": [
         {
           "binding": "DB",

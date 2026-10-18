@@ -13,6 +13,7 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
+        r2Buckets: ["ATTACHMENTS"],
         bindings: {
           ENVIRONMENT: "test",
           AUTH_MODE: "access",

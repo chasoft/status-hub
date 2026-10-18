@@ -62,12 +62,12 @@ describe("status periods", () => {
     expect(await openCount(t.code)).toBe(1);
     await core.resolveBlocker(env.DB, harry, { id: bl[1].id }, T0 + 3 * HOUR);           // -> in_progress
     expect(await openCount(t.code)).toBe(1);
-    await core.reportStatus(env.DB, peter, { task: t.code, status: "review", reviewer: "quinn" }, T0 + 4 * HOUR);
+    await core.reportStatus(env.DB, peter, { task: t.code, status: "review", reviewer: "quinn", links: ["https://example.com/output/review"] }, T0 + 4 * HOUR);
     await core.reportStatus(env.DB, harry, { task: t.code, status: "in_progress" }, T0 + 5 * HOUR);
     await core.assignTask(env.DB, harry, { task: t.code, assignee: "ethan" }, T0 + 6 * HOUR);
     expect((await core.getTaskRow(env.DB, t.code)).status).toBe("in_progress");
     expect(await openCount(t.code)).toBe(1);
-    await core.reportStatus(env.DB, harry, { task: t.code, status: "review", reviewer: "quinn" }, T0 + 7 * HOUR);
+    await core.reportStatus(env.DB, harry, { task: t.code, status: "review", reviewer: "quinn", links: ["https://example.com/output/review"] }, T0 + 7 * HOUR);
     await core.reportStatus(env.DB, harry, { task: t.code, status: "done", note: "ok" }, T0 + 8 * HOUR);
     expect(await openCount(t.code)).toBe(1);
 
@@ -156,7 +156,7 @@ describe("migration 0003 backfill", () => {
       (SELECT COUNT(*) FROM status_periods p WHERE p.task_code = t.code AND p.ended_at IS NULL) != 1`).first<{ n: number }>();
     expect(bad!.n).toBe(0);
     // and transitions keep working on backfilled tasks
-    await core.reportStatus(env.DB, await member("peter"), { task: "STS-CORE-900.1", status: "review", reviewer: "quinn" }, T0 + 4 * HOUR);
+    await core.reportStatus(env.DB, await member("peter"), { task: "STS-CORE-900.1", status: "review", reviewer: "quinn", links: ["https://example.com/output/review"] }, T0 + 4 * HOUR);
     const p = await periods("STS-CORE-900.1");
     expect(p.map((x) => [x.status, x.started_at, x.ended_at])).toEqual([
       ["in_progress", T0 + HOUR, T0 + 4 * HOUR], ["review", T0 + 4 * HOUR, null],
