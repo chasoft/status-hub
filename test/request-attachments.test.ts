@@ -56,6 +56,17 @@ describe("request versions", () => {
     expect(html).toContain("v2");
     expect(html).toContain('data-inline-kind="markdown"');
     expect(html).toContain('<span class="ie-form" hidden>');
+    expect(html).not.toContain("data-md-preview");
+    const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+    const layoutAt = style.indexOf(".request-edit .ie-view,.request-edit .ie-form{");
+    const hiddenAt = style.indexOf(".request-edit .ie-form[hidden],.request-edit .ie-view[hidden]{display:none}");
+    expect(layoutAt).toBeGreaterThan(0);
+    expect(hiddenAt).toBeGreaterThan(layoutAt);
+    expect(style.slice(layoutAt, layoutAt + 120)).not.toContain("display:flex");
+    const attachAt = html.indexOf('id="attachments"');
+    const attachments = html.slice(attachAt, html.indexOf("<h2>", attachAt));
+    expect(attachments).not.toContain("<textarea");
+    expect(attachments).not.toContain("ie-form");
 
     const older = await (await ui(`/t/${code}?tab=overview&rv=1`)).text();
     expect(older).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");

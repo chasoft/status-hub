@@ -273,7 +273,10 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .request-pick select{width:auto;min-width:4.5rem;padding:2px 6px}
 .request-pick button,.clamp-toggle{padding:2px 8px}
 .request-edit{width:100%;align-items:stretch}
-.request-edit .ie-view,.request-edit .ie-form{display:flex;flex-direction:column;align-items:stretch;width:100%;min-width:0}
+.request-edit .ie-view,.request-edit .ie-form{flex-direction:column;align-items:stretch;width:100%;min-width:0}
+.request-edit .ie-form[hidden],.request-edit .ie-view[hidden]{display:none}
+.request-edit.is-editing .ie-view{display:none}
+.request-edit.is-editing .ie-form{display:flex}
 .request-edit textarea{width:100%;min-height:10rem;max-width:none;padding:8px}
 .request-clamp{max-height:calc(1.45em * 12);overflow:hidden}
 .request-clamp.is-open{max-height:none}
@@ -1051,11 +1054,10 @@ async function taskDetail(db: D1Database, code: string, email: string, now: numb
   const requestMeta = shown.version ? `<span class="request-meta">${esc(shown.author_id)} · ${fmt(shown.at, tz)}${shown.note ? ` · ${esc(shown.note)}` : ""}</span>` : `<span class="request-meta">No versions yet</span>`;
   const requestBody = `<div class="ie-view"${requestError ? " hidden" : ""}><div class="request-clamp" data-clamp>${requestView}</div><button type="button" class="clamp-toggle" data-clamp-toggle hidden>Show more</button></div>`;
   const requestEditor = canEdit
-    ? `<form id="request-editor" class="inline-edit request-edit${requestError ? " is-editing" : ""}" method="post" action="${esc(action)}" data-inline-edit data-inline-kind="markdown" data-preview="/t/${encodeURIComponent(code)}/request-preview" novalidate>
+    ? `<form id="request-editor" class="inline-edit request-edit${requestError ? " is-editing" : ""}" method="post" action="${esc(action)}" data-inline-edit data-inline-kind="markdown" novalidate>
 ${requestBody}
 <span class="ie-form"${requestError ? "" : " hidden"}><textarea name="request_body" data-original="${esc(shown.markdown ?? REQUEST_TEMPLATE)}" aria-label="Request markdown">${esc(requestDraft)}</textarea>
 <label>Change note <input name="request_note" maxlength="500" aria-label="Change note" placeholder="What changed"></label>
-<div class="md md-preview" data-md-preview></div>
 <span class="row"><button type="submit" class="ie-save" aria-label="Save request">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel request">${ICON_X}</button></span></span>
 <span class="ie-msg" role="status">${requestError ? esc(requestError) : ""}</span></form>`
     : requestBody;
