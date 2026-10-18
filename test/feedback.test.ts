@@ -165,4 +165,94 @@ describe("leadership feedback", () => {
     expect(seen.feedback[0].unread).toBe(true);
     expect((await core.listMyTasks(env.DB, anna)).tasks.find((x) => x.code === t.code)?.unread_feedback_count).toBe(0);
   });
+
+  it("opens one LEADERSHIP_FEEDBACK alert for the task, visible like other alerts", async () => {
+    const t = await assignedTask("quinn");
+    const quinn = await member("quinn");
+    const before = (await core.whoami(env.DB, quinn)).alerts;
+    await core.addLeadershipFeedback(env.DB, { task: t.code, author: "Owner", note: "review the index" }, T0 + 1);
+    await core.addLeadershipFeedback(env.DB, { task: t.code, author: "Approver", note: "add a test" }, T0 + 2);
+
+    const rows = (await env.DB.prepare(
+      "SELECT rule, cleared_at FROM alerts WHERE task_code = ? AND rule = 'LEADERSHIP_FEEDBACK'",
+    ).bind(t.code).all<{ rule: string; cleared_at: number | null }>()).results;
+    expect(rows).toEqual([{ rule: "LEADERSHIP_FEEDBACK", cleared_at: null }]);
+
+    const mine = await core.listMyTasks(env.DB, quinn, undefined, T0 + 3);
+    expect(mine.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ task_code: t.code, rule: "LEADERSHIP_FEEDBACK" }),
+    ]));
+    expect((await core.whoami(env.DB, quinn)).alerts).toBe(before + 1);
+
+    const quinnTok = await issueToken("quinn");
+    const moved = await mcpCall(quinnTok, "report_status", { task: t.code, status: "in_progress" });
+    expect(moved.isError).toBe(false);
+    expect(moved.data.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ task_code: t.code, rule: "LEADERSHIP_FEEDBACK" }),
+    ]));
+
+    const html = await (await worker.fetch(`${UI}/alerts`, {
+      headers: { "Cf-Access-Jwt-Assertion": await accessJwt(VIEWER) },
+    })).text();
+    expect(html).toContain("Leadership feedback");
+    expect(html).toContain(t.code);
+  });
+
+  it("clears the LEADERSHIP_FEEDBACK alert when the assignee get_task marks feedback read", async () => {
+    const t = await assignedTask("quinn");
+    await core.addLeadershipFeedback(env.DB, { task: t.code, author: "Owner", note: "please read" }, T0 + 1);
+    const open = () => env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM alerts WHERE task_code = ? AND rule = 'LEADERSHIP_FEEDBACK' AND cleared_at IS NULL",
+    ).bind(t.code).first<{ n: number }>();
+
+    await core.getTask(env.DB, t.code, T0 + 2, await member("ethan"));
+    expect((await open())!.n).toBe(1);
+
+    const quinn = await member("quinn");
+    const seen = await core.getTask(env.DB, t.code, T0 + 3, quinn);
+    expect(seen.feedback[0]).toMatchObject({ unread: true });
+    expect((await open())!.n).toBe(0);
+    expect((await core.listMyTasks(env.DB, quinn, undefined, T0 + 4)).alerts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ task_code: t.code, rule: "LEADERSHIP_FEEDBACK" }),
+    ]));
+
+    const again = await core.getTask(env.DB, t.code, T0 + 5, quinn);
+    expect(again.alerts).not.toEqual(expect.arrayContaining([expect.objectContaining({ rule: "LEADERSHIP_FEEDBACK" })]));
+
+    await core.addLeadershipFeedback(env.DB, { task: t.code, author: "Approver", note: "a new note" }, T0 + 6);
+    expect((await open())!.n).toBe(1);
+  });
+
+  it("includes a pending_approval task with unread feedback in the default list_my_tasks call", async () => {
+    const peter = await member("peter");
+    const lily = await member("lily");
+    const f = await core.createFeature(env.DB, lily, { module: "STS-CORE", title: "unread outside filter" }, T0);
+    const pending = await core.createTask(env.DB, peter, {
+      feature: f.code, title: "pending with feedback", assignee: "peter",
+    }, T0);
+    expect(pending.status).toBe("pending_approval");
+    const backlog = await core.createTask(env.DB, lily, {
+      feature: f.code, title: "backlog with feedback", assignee: "peter", status: "backlog", ...fullRequest,
+    }, T0 + 1);
+    expect(backlog.status).toBe("backlog");
+
+    const before = (await core.listMyTasks(env.DB, peter, undefined, T0 + 2)).tasks.map((x) => x.code);
+    expect(before).not.toContain(pending.code);
+    expect(before).not.toContain(backlog.code);
+
+    await core.addLeadershipFeedback(env.DB, { task: pending.code, author: "Owner", note: "add the spec" }, T0 + 3);
+    await core.addLeadershipFeedback(env.DB, { task: backlog.code, author: "Approver", note: "do this backlog item" }, T0 + 4);
+
+    const mine = await core.listMyTasks(env.DB, peter, undefined, T0 + 5);
+    expect(mine.tasks.find((x) => x.code === pending.code)).toMatchObject({ status: "pending_approval", unread_feedback_count: 1 });
+    expect(mine.tasks.find((x) => x.code === backlog.code)).toMatchObject({ status: "backlog", unread_feedback_count: 1 });
+
+    const onlyProgress = await core.listMyTasks(env.DB, peter, "in_progress", T0 + 5);
+    expect(onlyProgress.tasks.map((x) => x.code)).toEqual(expect.arrayContaining([pending.code, backlog.code]));
+
+    await core.getTask(env.DB, pending.code, T0 + 6, peter);
+    const afterRead = await core.listMyTasks(env.DB, peter, undefined, T0 + 7);
+    expect(afterRead.tasks.find((x) => x.code === pending.code)).toBeUndefined();
+    expect(afterRead.tasks.find((x) => x.code === backlog.code)?.unread_feedback_count).toBe(1);
+  });
 });

@@ -80,6 +80,10 @@ The create-task form records the first active `is_admin` member as the creator. 
 
 The request document is stored as text. The page renders it with a sanitizer that escapes raw HTML, so a `<script>` or an event handler is text. Links are `http` or `https` only. A `javascript:` URL is dropped and the label is kept. Rendered links use `target="_blank"` and `rel="noopener noreferrer"`. The editor preview is a same-origin POST that returns that same HTML.
 
+## Linked agent
+
+`set_agent` accepts an https URL only. The task page renders that URL with `target="_blank"` and `rel="noopener noreferrer"`. `CURSOR_API_KEY`, when set, is a Worker secret. The page calls `GET https://api.cursor.com/v0/agents/{id}` with the key as the Basic username and does not follow redirects. The response read is capped at 64 KB and the call times out after 6 seconds. A failure is cached for 30 seconds and the page shows the status already stored on the task. The key is not placed in HTML, logs, or the MCP response.
+
 ## Attachments
 
 File bytes live in an optional R2 bucket bound as `ATTACHMENTS`. The binding is commented out in `wrangler.jsonc`. The bucket is not a public bucket and has no public custom domain. Downloads are `GET /t/:code/attachments/:id` on `UI_HOST` after the same UI sign-in as the board. The MCP host does not serve those bytes. A download sets `Content-Disposition` (`inline` for png, jpeg, gif, and webp; `attachment` otherwise), `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`, and `Content-Security-Policy: default-src 'none'; sandbox`.
@@ -90,6 +94,7 @@ Each upload inserts a new version and a new R2 key. Keys are not overwritten. Th
 
 - Raw bot tokens, raw UI login tokens, and production hash values from `members.token_hash` or `ui_login_tokens`.
 - `AUTH_SESSION_SECRET`. Set it with `wrangler secret put`, not in `wrangler.jsonc`.
+- `CURSOR_API_KEY`. Set it with `wrangler secret put`, not in `wrangler.jsonc`. The task page uses it only for a server-side request to `api.cursor.com`. The HTML does not include the key.
 - Cloudflare API tokens and account ids.
 - A real D1 `database_id`. The ids in `wrangler.jsonc` are placeholders. `pnpm run setup` writes real ids to gitignored `wrangler.local.jsonc`.
 - `.dev.vars` and other local secret files. `.dev.vars*` is gitignored.

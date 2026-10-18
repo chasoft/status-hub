@@ -140,7 +140,8 @@ pnpm run deploy:staging
 | `OWNER_IDS` | empty | No owner ids. | Comma-separated ids that may be `waiting_on`, `requested_by`, and `approved_by`. They do not have to be members. |
 | `APPROVER_IDS` | empty | No approver ids. | Comma-separated ids with the same request and approval privileges as owners. They do not have to be members. |
 | `UI_MEMBER_EMAILS` | `you@example.com=admin` | No explicit map. The email's local-part is used when it is an active member id. | Comma-separated `email=memberId` pairs for UI sessions. |
-| `LEADERSHIP_AUTHORS` | `you@example.com=Owner` | Nobody can post leadership feedback. | Comma-separated `email=Display Name` pairs. The display name is what gets stored. |
+| `LEADERSHIP_AUTHORS` | `you@example.com=Owner` | Nobody can post leadership feedback. | Comma-separated `email=Display Name` pairs. The display name is what gets stored. A note from one of these authors opens one `LEADERSHIP_FEEDBACK` alert on that task. |
+| `CURSOR_API_KEY` | not set in `wrangler.jsonc` | The task page shows the status stored by `set_agent`. | Optional Worker secret. Set with `wrangler secret put CURSOR_API_KEY`. Do not commit it. When set, the task page calls `GET https://api.cursor.com/v0/agents/{id}` for a link shaped `https://cursor.com/agents/bc-…`. The key is sent as Basic auth (username is the key, password empty) and is never written into the HTML. A failed or slow lookup is cached for 30 seconds and the page falls back to the stored status. The request times out after 6 seconds and reads at most 64 KB. |
 | `NOT_STARTED_MINUTES` | unset | `settings.not_started_minutes`, seeded as `15` | Optional alert override. |
 | `STALE_HOURS` | unset | `settings.stale_hours`, seeded as `4` | Optional alert override. |
 | `STALE_WORK_START_HOUR` | unset | `settings.stale_work_start_hour`, seeded as `8` | Optional alert override. Hour is inclusive, in the configured timezone. |
@@ -306,8 +307,10 @@ UPDATE settings SET value = '30' WHERE key = 'not_started_minutes';
 | `0008_ui_login.sql` | `ui_login_tokens` (SHA-256 of a UI login token) and `ui_sessions` (rows behind the session cookie). |
 | `0009_request_versions.sql` | `request_versions`. Each edit inserts a row. The body is never updated. |
 | `0010_attachments.sql` | `attachments`, `attachment_versions` (unique `r2_key`), `output_links`, `attachment_uploads`, and `request_version` / `output_ref` on `updates` and `feedback`. |
+| `0011_leadership_feedback_alert.sql` | Rebuilds `alerts` so `rule` may be `LEADERSHIP_FEEDBACK`. Existing rows, the open-alert unique index, and the task foreign key are kept. |
+| `0012_task_agent.sql` | Nullable `agent_url`, `agent_status`, and `agent_updated_at` on `tasks`. |
 
-Do not rename `0001` through `0010`. Add a new schema change as the next number, `0011` or later, and make it additive.
+Do not rename `0001` through `0012`. Add a new schema change as the next number, `0013` or later, and make it additive.
 
 ## Members and tokens
 
