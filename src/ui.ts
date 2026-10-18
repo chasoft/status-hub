@@ -1,7 +1,7 @@
 // Server-rendered dashboard. Behaviour lives in /assets/dashboard.js (no inline handlers).
-import { leadershipAuthor } from "./auth";
+import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
-import { loadSettings, STATUSES, formatDuration, summarizePeriods, type PeriodRow, type Status } from "./core";
+import { isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type PeriodRow, type Status } from "./core";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -62,7 +62,7 @@ const CSS = `
   --bg:#efece4; --top:#1c2430; --top-ink:#f6f3ec; --card:#fffcf7; --sidebar:#f7f4ee;
   --bd:#ddd6c8; --tx:#1c1915; --mut:#6d675e; --accent:#0e6b4f; --accent-ink:#f4fffb;
   --cell:#e7e2d6; --shadow:0 10px 28px #1c19151a; --scrollbar:#c4bbaa; --danger:#a33b32;
-  --warn:#8a5a12; --pill:#f4efe4; --focus:#0e6b4f; --label:168px;
+  --warn:#8a5a12; --pill:#f4efe4; --focus:#0e6b4f; --label:168px; --radius:5px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -80,7 +80,7 @@ body.app{height:100dvh;overflow:hidden}
 .shell{height:100%;display:flex;flex-direction:column;min-height:0}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
-button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:8px}
+button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:var(--radius)}
 button{cursor:pointer}
 button:hover,summary:hover{border-color:var(--accent)}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
@@ -90,23 +90,23 @@ button:hover,summary:hover{border-color:var(--accent)}
 .topbar{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--top);color:var(--top-ink);min-height:52px}
 .topbar a{color:var(--top-ink)}
 .org{font-weight:750;letter-spacing:-.02em;font-size:16px;text-decoration:none;margin-right:4px}
-.chip,.user-btn,.btn,.nav-open{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 10px;background:#ffffff14;color:var(--top-ink);border:1px solid #ffffff24;text-decoration:none}
+.chip,.user-btn,.btn,.nav-open{display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius);padding:5px 10px;background:#ffffff14;color:var(--top-ink);border:1px solid #ffffff24;text-decoration:none}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:650}
 .topbar .btn.primary{color:var(--accent-ink)}
 .search{flex:1;min-width:120px;max-width:340px;display:flex}
-.search input{width:100%;border:0;background:#ffffff14;color:var(--top-ink);border-radius:999px;padding:6px 12px}
+.search input{width:100%;border:0;background:#ffffff14;color:var(--top-ink);border-radius:var(--radius);padding:6px 12px}
 .search input::placeholder{color:#ffffff99}
 .user-btn{margin-left:auto}
 .avatar{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:700;flex:none}
 .user-btn .avatar{width:22px;height:22px}
-.count,.proj-alert{display:none;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;align-items:center;justify-content:center}
+.count,.proj-alert{display:none;min-width:18px;height:18px;padding:0 5px;border-radius:var(--radius);background:var(--danger);color:#fff;font-size:11px;font-weight:700;align-items:center;justify-content:center}
 .count.is-on,.proj-alert.is-on{display:inline-flex}
-kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:4px;padding:0 4px;opacity:.8}
+kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:var(--radius);padding:0 4px;opacity:.8}
 .body{flex:1;display:flex;min-height:0;min-width:0}
 .sidebar{width:232px;flex:none;overflow:auto;background:var(--sidebar);border-right:1px solid var(--bd);padding:10px 8px 16px;min-height:0}
 .nav-links,.proj-nav{display:flex;flex-direction:column;gap:2px}
 .nav-label{margin:14px 8px 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
-.nav-link,.proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;color:var(--tx);text-decoration:none}
+.nav-link,.proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius);color:var(--tx);text-decoration:none}
 .nav-link.is-current,.proj.is-current{background:var(--cell);font-weight:650}
 .proj-code{font:12px ui-monospace,monospace;width:42px;flex:none}
 .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -115,18 +115,18 @@ main{flex:1;min-width:0;min-height:0}
 .page-scroll{overflow:auto;padding:16px 18px 32px}
 .board-main{display:flex;flex-direction:column;overflow:hidden}
 .board-tools{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:8px 12px 0}
-.board-tools button,.page-scroll button,.dialog-body button,.drawer-body button{padding:5px 10px;border-radius:8px}
+.board-tools button,.page-scroll button,.dialog-body button,.drawer-body button,.feedback-dock button{padding:5px 10px;border-radius:var(--radius)}
 .stamp{margin-left:auto;color:var(--mut);font-size:12px}
 #board{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow-x:auto;overflow-y:hidden}
 .colheads,.summary,details.lane>summary,.lane-grid{display:grid;grid-template-columns:var(--label) repeat(var(--cols),minmax(160px,1fr));gap:8px;align-items:stretch}
 .colheads{position:sticky;top:0;z-index:1;padding:8px 12px 4px;background:var(--bg)}
-.colh{font-weight:650;padding:6px 8px;border-radius:8px;background:var(--cell);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.colh{font-weight:650;padding:6px 8px;border-radius:var(--radius);background:var(--cell);display:flex;gap:6px;align-items:center;flex-wrap:wrap;position:sticky;top:0}
 .colhead-label{color:var(--mut);font-size:12px;align-self:center}
-.lanes{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}
-details.lane,section.lane{min-height:0;display:flex;flex-direction:column}
-details.lane{flex:0 0 auto}
-details.lane[open],section.lane{flex:1 1 0}
-details.lane>summary,.summary{align-items:center;padding:6px 0;cursor:pointer;list-style:none}
+.lanes{flex:1;min-height:0;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;padding:0 12px 12px}
+details.lane,section.lane{min-height:0;display:flex;flex-direction:column;flex:0 0 auto}
+details.lane[open]{flex:0 1 auto;max-height:100%;overflow:hidden}
+section.lane{flex:1 1 auto;min-height:0;overflow:hidden}
+details.lane>summary,.summary{flex:none;align-items:center;padding:6px 0;cursor:pointer;list-style:none}
 details.lane>summary::-webkit-details-marker{display:none}
 .lane-label{display:flex;align-items:center;gap:6px;min-width:0}
 .lane-id{font-weight:750}
@@ -134,26 +134,30 @@ details.lane>summary::-webkit-details-marker{display:none}
 .lane-count{text-align:center;color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums}
 .chev{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid var(--mut);flex:none}
 details.lane:not([open]) .chev{transform:rotate(-90deg)}
-.lane-grid{flex:1;min-height:0;grid-template-rows:minmax(0,1fr);padding-bottom:8px}
-.cell{background:var(--cell);border-radius:10px;padding:6px;min-height:0;overflow:auto}
-.cell-label{display:none;font-weight:700;margin-bottom:6px}
+.lane-grid{flex:1 1 auto;min-height:0;min-width:0;overflow:hidden;grid-template-rows:minmax(0,1fr);padding-bottom:8px}
+.cell{background:var(--cell);border-radius:var(--radius);padding:6px;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto}
+.cell-label{display:none;position:sticky;top:0;z-index:1;background:var(--cell);font-weight:700;margin:-2px -2px 6px;padding:2px}
 .lane-side{display:flex;align-items:flex-start;padding-top:4px}
-.card{display:block;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--s);border-radius:10px;padding:8px;margin:0 0 8px;color:inherit;text-decoration:none;box-shadow:0 1px 0 #0000000a}
+.card{display:block;min-width:0;max-width:100%;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--s);border-radius:var(--radius);padding:8px;margin:0 0 8px;color:inherit;text-decoration:none;box-shadow:0 1px 0 #0000000a;overflow-wrap:anywhere}
 .card:hover{box-shadow:var(--shadow);text-decoration:none}
-.card-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
-.code{font:12px ui-monospace,monospace;color:var(--mut)}
-.title{display:block;font-weight:650;margin-top:4px}
-.meta{display:flex;justify-content:space-between;gap:8px;color:var(--mut);font-size:12px;margin-top:6px}
-.dur{white-space:nowrap}
+.card-top{display:flex;justify-content:space-between;align-items:center;gap:6px;min-width:0}
+.code{min-width:0;font:12px ui-monospace,monospace;color:var(--mut);overflow-wrap:anywhere}
+.title{display:block;min-width:0;font-weight:650;margin-top:4px;overflow-wrap:anywhere}
+.meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;color:var(--mut);font-size:12px;margin-top:6px;min-width:0}
+.who{min-width:0;overflow-wrap:anywhere}
+.dur{white-space:normal;overflow-wrap:anywhere}
 .pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
-.pill{display:inline-block;padding:1px 6px;border-radius:999px;font-size:11px;font-weight:650;background:var(--pill)}
+.pill{display:inline-block;padding:1px 6px;border-radius:var(--radius);font-size:11px;font-weight:650;background:var(--pill)}
 .pill-blocker{color:var(--danger)}.pill-alert{color:var(--warn)}.pill-unread{color:#1d4e89}.pill-pr{color:var(--accent)}
 .s-pending_approval{--s:#e07a2f}.s-backlog{--s:#8b93a7}.s-assigned{--s:#5b6ee1}.s-in_progress{--s:#2f7de1}.s-review{--s:#8d4fd6}.s-blocked{--s:#d64545}.s-done{--s:#2f9e62}.s-cancelled{--s:#757575}
-.badge{display:inline-block;padding:1px 6px;border-radius:999px;font-size:11px;color:#fff;background:var(--s)}
+.badge{display:inline-block;padding:1px 6px;border-radius:var(--radius);font-size:11px;color:#fff;background:var(--s)}
 .cancelled{margin-top:8px}
 .cancelled-list{max-height:180px;overflow:auto}
-table{border-collapse:collapse;width:100%;background:var(--card);border-radius:10px;overflow:hidden}
+table{border-collapse:separate;border-spacing:0;width:100%;background:var(--card)}
 td,th{border-bottom:1px solid var(--bd);padding:6px 8px;text-align:left;vertical-align:top}
+.sheet-scroll th,.tab-scroll th,.page-scroll th{position:sticky;top:0;background:var(--card);z-index:1}
+.page-scroll h2,.page-scroll h3{position:sticky;top:0;background:var(--bg);z-index:2;margin:0;padding:8px 0}
+.page-scroll th{top:2.4rem}
 .lead{background:#fff6ea;box-shadow:inset 3px 0 var(--warn)}
 .flag{color:var(--danger);font-weight:700}
 .muted,.empty{color:var(--mut)}
@@ -167,7 +171,37 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 .dialog-bar,.drawer-bar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--bd)}
 .dialog-bar h2,.drawer-bar h2{margin:0;font-size:16px;flex:1}
 .dialog-body{padding:14px;overflow:auto;max-height:min(70dvh,640px)}
-.drawer-body{overflow:auto;height:calc(100dvh - 54px);padding:14px 16px 28px}
+.drawer-body{overflow:hidden;display:flex;flex-direction:column;height:calc(100dvh - 54px);padding:0}
+.page-fill,.task-main{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:12px 16px 16px}
+.task-main{padding-bottom:0}
+.page-fill>.back,.task-main>.back{flex:none;margin:0 0 8px}
+.sheets{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px}
+.sheet{display:flex;flex-direction:column;min-height:0;flex:1 1 0}
+.sheet-fit{flex:0 1 auto;max-height:42%}
+.sheet-h{flex:none;margin:0 0 6px}
+.sheet-scroll{flex:1;min-height:0;overflow:auto}
+.task{display:flex;flex-direction:column;flex:1;min-height:0}
+.task-tabs{display:flex;flex:none;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--bd)}
+.task-tabs [role="tab"]{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;border-bottom:0;border-radius:var(--radius) var(--radius) 0 0;background:transparent;color:var(--mut);text-decoration:none;padding:6px 10px}
+.task-tabs [role="tab"][aria-selected="true"]{background:var(--card);color:var(--tx);border-color:var(--bd);font-weight:650}
+.task-panel{display:none;flex:1;min-height:0;flex-direction:column}
+.task-panel.is-on{display:flex}
+.tab-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 14px}
+.feedback-dock{flex:none;display:flex;gap:8px;align-items:flex-end;padding:8px 12px;border-top:1px solid var(--bd);background:var(--card);position:sticky;bottom:0;z-index:2}
+.feedback-dock textarea{flex:1;width:auto;max-width:none;min-height:2.25rem;max-height:8rem;resize:vertical;line-height:1.4}
+.feedback-dock textarea:focus{min-height:4.75rem}
+.inline-edit{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.ie-view,.ie-form{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.ie-form[hidden],.ie-view[hidden]{display:none}
+.inline-edit.is-editing .ie-view{display:none}
+.inline-edit.is-editing .ie-form{display:flex}
+.ie-pen,.ie-save,.ie-cancel{padding:2px 6px;line-height:0;background:transparent}
+.ie-icon{width:14px;height:14px;display:block}
+.ie-form input,.ie-form select{width:auto;min-width:10rem;max-width:100%;flex:1}
+.ie-msg{flex-basis:100%;color:var(--danger);font-size:12px;min-height:0}
+.ie-msg:empty{display:none}
+.inline-edit.is-saving .ie-msg{color:var(--mut)}
+.ie-value{min-width:0;overflow-wrap:anywhere}
 [popover]{border:1px solid var(--bd);border-radius:12px;background:var(--card);color:var(--tx);padding:12px;box-shadow:var(--shadow);max-width:min(360px,calc(100vw - 24px));max-height:min(70dvh,520px);overflow:auto}
 .quick{list-style:none;margin:8px 0;padding:0}
 .quick a{display:flex;justify-content:space-between;gap:8px;padding:4px 0;color:var(--tx)}
@@ -188,12 +222,13 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
   .body{display:block}
   .sidebar{width:auto;max-height:none;border-right:0;border-bottom:1px solid var(--bd);overflow:auto}
   .nav-links{flex-direction:row;flex-wrap:wrap}
-  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell{height:auto;max-height:none;overflow:visible;flex:none}
+  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell,.task-main,.page-fill,.task,.task-panel,.tab-scroll,.sheet,.sheet-scroll{height:auto;max-height:none;overflow:visible;flex:none}
   .cell-label{display:block}
   .colheads{display:none}
   .summary,details.lane>summary{display:flex;flex-wrap:wrap}
   .lane-grid{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;grid-template-columns:none;padding-bottom:12px}
-  .cell{min-width:78vw;scroll-snap-align:start;flex:none}
+  .cell{min-width:78vw;scroll-snap-align:start;flex:none;overflow-x:hidden;overflow-y:visible}
+  .feedback-dock{position:sticky;bottom:0}
   .lane-side{display:none}
   dialog.drawer{width:100vw}
 }
@@ -457,7 +492,7 @@ ${nav("members", "/members", "Members")}
 </div>
 ${projects}
 </nav>
-<main id="main" class="${board ? "board-main" : "page-scroll"}">${main}</main>
+<main id="main" class="${board ? "board-main" : page === "task" ? "task-main" : page === "done" || page === "alerts" || page === "members" ? "page-fill" : "page-scroll"}">${main}</main>
 </div>
 </div>
 <div id="pop-member" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("status", f.status)}${hidden("q", f.q)}<label>Member<br><select name="member">${memberOpts}</select></label><p><button>Apply</button></p></form>
@@ -467,6 +502,7 @@ ${projects}
 <div id="pop-alerts" popover><p><strong>Open alerts</strong></p><ul class="quick">${chrome.alerts.map((a) => `<li><a href="/alerts">${esc(RULE_LABEL[a.rule] ?? a.rule)} <b>${a.n}</b></a></li>`).join("") || "<li>No open alerts</li>"}</ul><a href="/alerts">View alerts</a></div>
 <div id="user-menu" popover><p class="user-email">${esc(email)}</p><p class="muted">${esc(tzLabel(chrome.tz))}</p>${logout}</div>
 ${dialogs}
+<noscript><style>.ie-form[hidden]{display:flex !important}.ie-view{display:none !important}</style></noscript>
 <script src="/assets/dashboard.js" defer></script>
 </body></html>`;
 }
@@ -551,7 +587,8 @@ export async function renderDone(db: D1Database, url: URL, email: string, now = 
   const { results } = await db.prepare(`${CARD_SQL} WHERE ${where.join(" AND ")} ORDER BY t.done_at DESC, t.code DESC`).bind(...binds).all();
   const rows = asCards(results);
   const title = chrome.filters.project ? `Done · ${chrome.filters.project}` : "Done";
-  const body = `<p><a href="${esc(boardHref(chrome.filters))}">Back to board</a></p><h2>${esc(title)} (${rows.length})</h2>${rows.map((c) => card(c, now, chrome.tz)).join("") || `<p class="empty">No done tasks.</p>`}`;
+  const cards = rows.map((c) => card(c, now, chrome.tz)).join("") || `<p class="empty">No done tasks.</p>`;
+  const body = `<p class="back"><a href="${esc(boardHref(chrome.filters))}">Back to board</a></p><div class="sheets"><section class="sheet"><h2 class="sheet-h">${esc(title)} (${rows.length})</h2><div class="sheet-scroll">${cards}</div></section></div>`;
   return shell(title, body, email, chrome, "done", false);
 }
 
@@ -559,80 +596,164 @@ function reqCell(v: unknown): string {
   return v ? esc(v) : "Not set";
 }
 
-async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: { error?: string; pr_url?: string }): Promise<string | null> {
+const TASK_TABS = ["overview", "timeline", "history", "blockers"] as const;
+type TaskTab = (typeof TASK_TABS)[number];
+export interface TaskNotice { error?: string; field?: string; value?: string; pr_url?: string }
+
+function taskTabOf(raw?: string | null): TaskTab {
+  return (TASK_TABS as readonly string[]).includes(raw ?? "") ? raw as TaskTab : "overview";
+}
+
+const ICON_PEN = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M11.2 2.8l2 2L5.5 12.5 3 13l.5-2.5 7.7-7.7z"/></svg>`;
+const ICON_OK = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5 6.5 12 13 4"/></svg>`;
+const ICON_X = `<svg class="ie-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 4l8 8M12 4l-8 8"/></svg>`;
+
+function dueInputValue(ms: number | null | undefined, offsetMinutes: number): string {
+  if (!ms) return "";
+  const d = new Date(ms + offsetMinutes * 60_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** Value with a pencil. The editor (input, check, x) replaces the value in place. */
+function inlineEdit(opts: {
+  action: string; name: string; label: string; kind: "url" | "links" | "text" | "time";
+  value: string; display: string; editable: boolean; error?: string; draft?: string;
+  inputType?: string; options?: { value: string; label: string }[];
+}): string {
+  const shown = opts.display || `<span class="muted">—</span>`;
+  if (!opts.editable) return `<span class="ie-value">${shown}</span>`;
+  const open = !!opts.error;
+  const draft = opts.draft ?? opts.value;
+  const control = opts.options
+    ? `<select name="${esc(opts.name)}" aria-label="${esc(opts.label)}" data-original="${esc(opts.value)}">${opts.options.map((o) => `<option value="${esc(o.value)}"${o.value === draft ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+    : `<input name="${esc(opts.name)}" type="${opts.inputType || "text"}" value="${esc(draft)}" data-original="${esc(opts.value)}" aria-label="${esc(opts.label)}">`;
+  return `<form class="inline-edit${open ? " is-editing" : ""}" method="post" action="${esc(opts.action)}" data-inline-edit data-inline-kind="${opts.kind}" novalidate>
+<span class="ie-view"${open ? " hidden" : ""}><span class="ie-value">${shown}</span><button type="button" class="ie-pen" data-inline-open aria-label="Edit ${esc(opts.label)}">${ICON_PEN}</button></span>
+<span class="ie-form"${open ? "" : " hidden"}>${control}<button type="submit" class="ie-save" aria-label="Save ${esc(opts.label)}">${ICON_OK}</button><button type="button" class="ie-cancel" data-inline-cancel aria-label="Cancel ${esc(opts.label)}">${ICON_X}</button></span>
+<span class="ie-msg" role="status">${opts.error ? esc(opts.error) : ""}</span></form>`;
+}
+
+function sheet(tag: "h2" | "h3", title: string, inner: string, fit = false): string {
+  return `<section class="sheet${fit ? " sheet-fit" : ""}"><${tag} class="sheet-h">${title}</${tag}><div class="sheet-scroll">${inner}</div></section>`;
+}
+
+function taskTabBtn(id: TaskTab, label: string, active: TaskTab): string {
+  const on = id === active;
+  return `<a role="tab" id="tab-${id}" href="?tab=${id}" data-tab="${id}" aria-selected="${on ? "true" : "false"}" aria-controls="panel-${id}" tabindex="${on ? "0" : "-1"}">${label}</a>`;
+}
+
+function taskPanel(id: TaskTab, active: TaskTab, body: string): string {
+  const on = id === active;
+  return `<section role="tabpanel" id="panel-${id}" class="task-panel${on ? " is-on" : ""}" data-tab-panel="${id}" aria-labelledby="tab-${id}"${on ? "" : " hidden"}>${body}</section>`;
+}
+
+async function taskDetail(db: D1Database, code: string, email: string, now: number, notice?: TaskNotice, tab?: string | null): Promise<string | null> {
   const t = await db.prepare(`${CARD_SQL} WHERE t.code = ?`).bind(code).first<CardRow>();
   if (!t) return null;
   const full = await db.prepare("SELECT * FROM tasks WHERE code = ?").bind(code).first<Record<string, unknown>>();
   if (!full) return null;
-  const [u, b, sp, fb] = await db.batch([
+  const [u, b, sp, fb, mem] = await db.batch([
     db.prepare("SELECT * FROM updates WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
     db.prepare("SELECT * FROM blockers WHERE task_code = ? ORDER BY opened_at DESC").bind(code),
     db.prepare("SELECT id, status, started_at, ended_at, member_id FROM status_periods WHERE task_code = ? ORDER BY started_at, id").bind(code),
-    db.prepare("SELECT id, author, note, at FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
+    db.prepare("SELECT id, author, note, at, read_by FROM feedback WHERE task_code = ? ORDER BY at DESC, id DESC LIMIT 100").bind(code),
+    db.prepare("SELECT id FROM members WHERE active = 1 ORDER BY id"),
   ]);
   const tz = (await loadSettings(db)).tz_offset_minutes;
   const row = asCards([t])[0]!;
+  const actor = await memberForAccessEmail(db, email);
+  const canEdit = !!actor && (isLeader(actor) || actor.id === row.assignee_id);
+  const canAssign = !!actor && isLeader(actor) && row.status !== "done" && row.status !== "cancelled" && row.status !== "pending_approval";
+  const memberIds = (mem.results as { id: string }[]).map((m) => m.id);
+  const memberOptions = memberIds.map((id) => ({ value: id, label: id }));
+  const action = `/t/${encodeURIComponent(code)}`;
+  const errField = notice?.field ?? (notice?.error && notice.pr_url !== undefined ? "pr_url" : "");
+  const errValue = notice?.value ?? notice?.pr_url ?? "";
+  const fieldError = (name: string) => (errField === name ? notice?.error : undefined);
+  const fieldDraft = (name: string, saved: string) => (errField === name ? errValue : saved);
   const per = summarizePeriods(sp.results as unknown as PeriodRow[], now);
   const badge = (st: Status) => `<span class="s-${st}"><span class="badge">${esc(STATUS_LABEL[st] ?? st)}</span></span>`;
-  const timeline = `<h3>Time in status</h3>
-<table class="periods"><tr><th>Status</th><th>Started</th><th>Ended</th><th>Duration</th><th>By</th></tr>
-${per.timeline.map((p) => `<tr><td>${badge(p.status)}</td><td>${fmt(p.started_at, tz)}</td><td>${p.open ? "<i>current</i>" : fmt(p.ended_at, tz)}</td><td>${p.duration}</td><td>${esc(p.member_id ?? "")}</td></tr>`).join("") || "<tr><td colspan=5>—</td></tr>"}
-</table>
-<table class="totals" style="margin-top:6px"><tr><th>Totals by status</th>${STATUSES.filter((st) => per.totals[st]).map((st) => `<th>${badge(st)}</th>`).join("")}</tr>
-<tr><td></td>${STATUSES.filter((st) => per.totals[st]).map((st) => `<td>${per.totals[st].duration}${per.totals[st].periods > 1 ? ` <small>(${per.totals[st].periods} times)</small>` : ""}</td>`).join("")}</tr></table>`;
-  const history = [
-    ...(u.results as Record<string, unknown>[]).map((x) => ({
-      at: Number(x.at), id: Number(x.id), who: String(x.member_id),
-      status: `${x.status_from ?? ""} → ${x.status_to ?? ""}`,
-      note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}${x.links ? `<br>${linkList(String(x.links))}` : ""}`,
-      lead: false,
-    })),
-    ...(fb.results as Record<string, unknown>[]).map((x) => ({
-      at: Number(x.at), id: Number(x.id), who: String(x.author), status: "leadership feedback", note: esc(x.note), lead: true,
-    })),
-  ].sort((a, b) => b.at - a.at || b.id - a.id);
+  const periodRows = per.timeline.map((p) => `<tr><td>${badge(p.status)}</td><td>${fmt(p.started_at, tz)}</td><td>${p.open ? "<i>current</i>" : fmt(p.ended_at, tz)}</td><td>${p.duration}</td><td>${esc(p.member_id ?? "")}</td></tr>`).join("") || `<tr><td colspan="5">—</td></tr>`;
+  const periodsTable = `<table class="periods"><thead><tr><th>Status</th><th>Started</th><th>Ended</th><th>Duration</th><th>By</th></tr></thead><tbody>${periodRows}</tbody></table>`;
+  const totalHeads = STATUSES.filter((st) => per.totals[st]);
+  const totalsTable = `<table class="totals"><thead><tr><th>Totals by status</th>${totalHeads.map((st) => `<th>${badge(st)}</th>`).join("")}</tr></thead><tbody><tr><td></td>${totalHeads.map((st) => `<td>${per.totals[st].duration}${per.totals[st].periods > 1 ? ` <small>(${per.totals[st].periods} times)</small>` : ""}</td>`).join("")}</tr></tbody></table>`;
+  const updates = (u.results as Record<string, unknown>[]).map((x) => ({
+    at: Number(x.at), id: Number(x.id), who: String(x.member_id),
+    status: `${x.status_from ?? ""} → ${x.status_to ?? ""}`,
+    note: `${esc(x.note)}${x.approved_by ? ` · approved by ${esc(x.approved_by)}` : ""}${x.links ? `<br>${linkList(String(x.links))}` : ""}`,
+    links: x.links,
+  }));
+  let linkValue = "";
+  for (const x of u.results as Record<string, unknown>[]) {
+    if (!x.links) continue;
+    try {
+      const parsed = JSON.parse(String(x.links));
+      if (Array.isArray(parsed)) {
+        linkValue = parsed.filter((item): item is string => typeof item === "string").join(" ");
+        break;
+      }
+    } catch { /* keep looking */ }
+  }
+  const linkDisplay = linkValue.split(/\s+/).filter(Boolean).map((href) => externalAnchor(href)).join("<br>") || "";
+  const feedback = (fb.results as Record<string, unknown>[]).map((x) => ({
+    at: Number(x.at), who: String(x.author), note: esc(x.note),
+    unread: x.read_by == null || String(x.read_by) === "" || String(x.read_by) !== (row.assignee_id ?? ""),
+  }));
+  const unread = feedback.filter((x) => x.unread).length;
   const author = leadershipAuthor(email);
-  const feedbackForm = author ? `<h3>Leadership feedback</h3>
-<form method="post" action="/t/${esc(code)}/feedback"><textarea name="note" maxlength="500" required rows="3"></textarea>
-<div><button>Send</button></div></form>` : "";
+  const feedbackForm = author ? `<form method="post" action="/t/${esc(code)}/feedback" class="feedback-dock"><textarea name="note" maxlength="500" required rows="1" aria-label="Leadership feedback"></textarea><button type="submit">Send</button></form>` : "";
+  const feedbackTable = `<table><thead><tr><th>When</th><th>Who</th><th>Note</th></tr></thead><tbody>${feedback.map((x) => `<tr class="lead"><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${x.note}</td></tr>`).join("") || `<tr><td colspan="3">—</td></tr>`}</tbody></table>`;
   const reqLink = full.request_link ? externalAnchor(String(full.request_link)) : "Not set";
-  const prStored = full.pr_url ? externalAnchor(String(full.pr_url)) : "";
-  return `<div id="task-detail"><h2>${esc(code)}</h2>
-<table><tr><th>Requested by</th><td>${reqCell(full.requested_by)}</td></tr>
+  const prValue = full.pr_url ? String(full.pr_url) : "";
+  const dueValue = dueInputValue(full.due_at as number | null, tz);
+  const reviewerValue = full.reviewer_id ? String(full.reviewer_id) : "";
+  const assigneeValue = row.assignee_id ?? "";
+  const active = taskTabOf(tab);
+  const overviewBadge = unread ? ` <span class="count is-on">${unread}</span>` : "";
+  const overview = `<div class="tab-scroll"><h2>${esc(code)}</h2>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><th>Requested by</th><td>${reqCell(full.requested_by)}</td></tr>
 <tr><th>Requested at</th><td>${full.requested_at ? fmt(Number(full.requested_at), tz) : "Not set"}</td></tr>
-<tr><th>Request link</th><td>${reqLink}</td></tr></table>
+<tr><th>Request link</th><td>${reqLink}</td></tr>
+</tbody></table>
 ${card(row, now, tz)}
-<table><tr><th>Feature</th><td>${esc(row.feature_code)} · ${esc(row.feature_title)}</td></tr>
-<tr><th>Reviewer</th><td>${full.reviewer_id ? esc(full.reviewer_id) : "—"}</td></tr>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><th>Feature</th><td>${esc(row.feature_code)} · ${esc(row.feature_title)}</td></tr>
+<tr><th>Assignee</th><td>${inlineEdit({ action, name: "assignee", label: "Assignee", kind: "text", value: fieldDraft("assignee", assigneeValue), display: assigneeValue ? esc(assigneeValue) : "", editable: canAssign, error: fieldError("assignee"), draft: fieldDraft("assignee", assigneeValue), options: memberOptions })}</td></tr>
+<tr><th>Reviewer</th><td>${inlineEdit({ action, name: "reviewer", label: "Reviewer", kind: "text", value: fieldDraft("reviewer", reviewerValue), display: reviewerValue ? esc(reviewerValue) : "", editable: canEdit, error: fieldError("reviewer"), draft: fieldDraft("reviewer", reviewerValue), options: [{ value: "", label: "—" }, ...memberOptions] })}</td></tr>
 <tr><th>Assigned at</th><td>${fmt(full.assigned_at as number | null, tz)}</td></tr>
 <tr><th>Started</th><td>${fmt(full.started_at as number | null, tz)}</td></tr>
-<tr><th>Due</th><td>${fmt(full.due_at as number | null, tz)}</td></tr>
+<tr><th>Due</th><td>${inlineEdit({ action, name: "due_at", label: "Due", kind: "time", value: fieldDraft("due_at", dueValue), display: fmt(full.due_at as number | null, tz) === "—" ? "" : fmt(full.due_at as number | null, tz), editable: canEdit, error: fieldError("due_at"), draft: fieldDraft("due_at", dueValue), inputType: "datetime-local" })}</td></tr>
 <tr><th>Done at</th><td>${fmt(full.done_at as number | null, tz)}</td></tr>
-<tr><th>PR</th><td>${prStored ? `${prStored}<br>` : ""}
-<form method="post" action="/t/${encodeURIComponent(code)}" class="inline">
-<label>PR URL <input name="pr_url" value="${esc(notice?.pr_url ?? full.pr_url ?? "")}" size="52" placeholder="https://"></label>
-<button type="submit">Save</button></form>
-${notice?.error ? `<p class="flag">${esc(notice.error)}</p>` : ""}</td></tr></table>
-${timeline}
-<h3>Blockers</h3><table><tr><th>#</th><th>Kind</th><th>Waiting on</th><th>Detail</th><th>Opened</th><th>Closed</th></tr>
-${(b.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.kind)}</td><td>${esc(x.waiting_on)}</td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td><td>${fmt(x.resolved_at as number | null, tz)}</td></tr>`).join("")}</table>
-${feedbackForm}
-<h3>History</h3><table><tr><th>When</th><th>Who</th><th>Status</th><th>Note</th></tr>
-${history.map((x) => `<tr${x.lead ? ' class="lead"' : ""}><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("")}</table></div>`;
+<tr><th>PR</th><td>${inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: prValue, display: prValue ? externalAnchor(prValue) : "", editable: canEdit, error: fieldError("pr_url"), draft: fieldDraft("pr_url", prValue), inputType: "url" })}</td></tr>
+<tr><th>Links</th><td>${inlineEdit({ action, name: "links", label: "Links", kind: "links", value: linkValue, display: linkDisplay, editable: canEdit, error: fieldError("links"), draft: fieldDraft("links", linkValue) })}</td></tr>
+</tbody></table></div>
+${sheet("h3", "Feedback", feedbackTable)}
+${feedbackForm}`;
+  const historyTable = `<table><thead><tr><th>When</th><th>Who</th><th>Status</th><th>Note</th></tr></thead><tbody>${updates.map((x) => `<tr><td>${fmt(x.at, tz)}</td><td>${esc(x.who)}</td><td>${esc(x.status)}</td><td>${x.note}</td></tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}</tbody></table>`;
+  const blockerTable = `<table><thead><tr><th>#</th><th>Kind</th><th>Waiting on</th><th>Detail</th><th>Opened</th><th>Closed</th></tr></thead><tbody>${(b.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.kind)}</td><td>${esc(x.waiting_on)}</td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td><td>${fmt(x.resolved_at as number | null, tz)}</td></tr>`).join("") || `<tr><td colspan="6">—</td></tr>`}</tbody></table>`;
+  return `<div id="task-detail" class="task" data-task-tabs>
+<div class="task-tabs" role="tablist" aria-label="Task sections">${taskTabBtn("overview", `Overview${overviewBadge}`, active)}${taskTabBtn("timeline", "Timeline", active)}${taskTabBtn("history", "History", active)}${taskTabBtn("blockers", "Blockers", active)}</div>
+${taskPanel("overview", active, overview)}
+${taskPanel("timeline", active, `${sheet("h3", "Time in status", periodsTable)}${sheet("h3", "Totals", totalsTable, true)}`)}
+${taskPanel("history", active, sheet("h3", "History", historyTable))}
+${taskPanel("blockers", active, sheet("h3", "Blockers", blockerTable))}
+</div>`;
 }
 
-export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: { error?: string; pr_url?: string }) {
-  const detail = await taskDetail(db, code, email, now, notice);
+export async function renderTask(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null) {
+  const detail = await taskDetail(db, code, email, now, notice, tab);
   if (!detail) return null;
   const task = await db.prepare("SELECT project_code FROM tasks WHERE code = ?").bind(code).first<{ project_code: string }>();
   const url = new URL(`https://local/?project=${encodeURIComponent(task?.project_code ?? "")}`);
   const chrome = await loadChrome(db, url);
   const back = boardHref(chrome.filters);
-  return shell(code, `<p><a href="${esc(back)}">Back to board</a></p>${detail}`, email, chrome, "task", false);
+  return shell(code, `<p class="back"><a href="${esc(back)}">Back to board</a></p>${detail}`, email, chrome, "task", false);
 }
 
-export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: { error?: string; pr_url?: string }) {
-  return taskDetail(db, code, email, now, notice);
+export async function renderTaskFragment(db: D1Database, code: string, email: string, now = Date.now(), notice?: TaskNotice, tab?: string | null) {
+  return taskDetail(db, code, email, now, notice, tab);
 }
 
 export async function renderProject(db: D1Database, code: string, email: string) {
@@ -647,10 +768,13 @@ export async function renderProject(db: D1Database, code: string, email: string)
   ]);
   const fs = feats.results as Record<string, unknown>[];
   const chrome = await loadChrome(db, new URL(`https://local/?project=${encodeURIComponent(code)}`));
+  const actor = await memberForAccessEmail(db, email);
+  const leader = !!actor && isLeader(actor);
+  const priorities = ["P0", "P1", "P2", "P3"].map((id) => ({ value: id, label: id }));
   const repo = p.repo_url ? externalAnchor(String(p.repo_url), "repo") : "";
   const body = `<h2>${esc(p.code)} · ${esc(p.name)}</h2><p>Owner: ${esc(p.owner_id)} ${repo ? `· ${repo}` : ""} · <a href="${esc(boardHref(chrome.filters))}">Board</a></p>
-${(mods.results as Record<string, unknown>[]).map((m) => `<h3>${esc(m.code)} · ${esc(m.name)}</h3><table><tr><th>Feature</th><th>Priority</th><th>Owner</th><th>Progress</th></tr>
-${fs.filter((f) => f.module_code === m.code).map((f) => `<tr><td><a href="${esc(boardHref(chrome.filters))}">${esc(f.code)}</a> ${esc(f.title)}</td><td>${esc(f.priority)}</td><td>${esc(f.owner_id)}</td><td>${Number(f.total) ? Math.round((100 * Number(f.done)) / Number(f.total)) : 0}% (${esc(f.done)}/${esc(f.total)})</td></tr>`).join("") || "<tr><td colspan=4>—</td></tr>"}</table>`).join("")}`;
+${(mods.results as Record<string, unknown>[]).map((m) => `<h3>${esc(m.code)} · ${esc(m.name)}</h3><div class="sheet-scroll"><table><thead><tr><th>Feature</th><th>Priority</th><th>Owner</th><th>Progress</th></tr></thead><tbody>
+${fs.filter((f) => f.module_code === m.code).map((f) => `<tr><td><a href="${esc(boardHref(chrome.filters))}">${esc(f.code)}</a> ${esc(f.title)}</td><td>${inlineEdit({ action: `/f/${encodeURIComponent(String(f.code))}`, name: "priority", label: "Priority", kind: "text", value: String(f.priority), display: esc(f.priority), editable: leader, options: priorities })}</td><td>${esc(f.owner_id)}</td><td>${Number(f.total) ? Math.round((100 * Number(f.done)) / Number(f.total)) : 0}% (${esc(f.done)}/${esc(f.total)})</td></tr>`).join("") || "<tr><td colspan=4>—</td></tr>"}</tbody></table></div>`).join("")}`;
   return shell(code, body, email, chrome, "project", false);
 }
 
@@ -667,10 +791,9 @@ export async function renderAlerts(db: D1Database, email: string, now = Date.now
     return rank || Number(x.opened_at) - Number(y.opened_at);
   });
   const chrome = await loadChrome(db, new URL("https://local/"));
-  const body = `<h2>Open blockers</h2><table><tr><th>Task</th><th>Waiting on</th><th>Detail</th><th>Opened</th></tr>
-${blockers.map((x) => `<tr><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a> ${esc(x.title)}</td><td><b>${esc(x.waiting_on)}</b></td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td></tr>`).join("")}</table>
-<h2>Alerts</h2><table><tr><th>Rule</th><th>Task</th><th>Member</th><th>Assigned</th><th>Last update</th></tr>
-${(a.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(RULE_LABEL[String(x.rule)] ?? String(x.rule))}</td><td><a href="/t/${esc(x.code)}">${esc(x.code)}</a> ${esc(x.title)}</td><td><a href="/m/${esc(x.assignee_id)}">${esc(x.assignee_id)}</a></td><td>${fmt(x.assigned_at as number | null, tz)} (${ago(x.assigned_at as number | null, now)})</td><td>${fmt(Number(x.last_update_at), tz)}</td></tr>`).join("")}</table>`;
+  const blockerTable = `<table><thead><tr><th>Task</th><th>Waiting on</th><th>Detail</th><th>Opened</th></tr></thead><tbody>${blockers.map((x) => `<tr><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a> ${esc(x.title)}</td><td><b>${esc(x.waiting_on)}</b></td><td>${esc(x.detail)}</td><td>${fmt(Number(x.opened_at), tz)} (${ago(Number(x.opened_at), now)})</td></tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}</tbody></table>`;
+  const alertTable = `<table><thead><tr><th>Rule</th><th>Task</th><th>Member</th><th>Assigned</th><th>Last update</th></tr></thead><tbody>${(a.results as Record<string, unknown>[]).map((x) => `<tr><td>${esc(RULE_LABEL[String(x.rule)] ?? String(x.rule))}</td><td><a href="/t/${esc(x.code)}">${esc(x.code)}</a> ${esc(x.title)}</td><td><a href="/m/${esc(x.assignee_id)}">${esc(x.assignee_id)}</a></td><td>${fmt(x.assigned_at as number | null, tz)} (${ago(x.assigned_at as number | null, now)})</td><td>${fmt(Number(x.last_update_at), tz)}</td></tr>`).join("") || `<tr><td colspan="5">—</td></tr>`}</tbody></table>`;
+  const body = `<div class="sheets">${sheet("h2", "Open blockers", blockerTable)}${sheet("h2", "Alerts", alertTable)}</div>`;
   return shell("Alerts", body, email, chrome, "alerts", false);
 }
 
@@ -680,8 +803,8 @@ export async function renderMembers(db: D1Database, email: string) {
     (SELECT COUNT(*) FROM alerts a JOIN tasks t ON t.code = a.task_code WHERE t.assignee_id = m.id AND a.cleared_at IS NULL) AS alerts
     FROM members m WHERE m.active = 1 ORDER BY m.is_admin DESC, m.id`).all<Record<string, unknown>>();
   const chrome = await loadChrome(db, new URL("https://local/"));
-  const body = `<h2>Members</h2><table><tr><th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th></tr>
-${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${esc(m.open)}</td><td>${esc(m.alerts)}</td></tr>`).join("")}</table>`;
+  const table = `<table><thead><tr><th>Member</th><th>Role</th><th>Token</th><th>Open tasks</th><th>Alerts</th></tr></thead><tbody>${results.map((m) => `<tr><td><a href="/m/${esc(m.id)}">${esc(m.name)}</a></td><td>${esc(m.role)}${m.is_admin ? " · admin" : ""}</td><td>${m.has_token ? "yes" : "none"}</td><td>${esc(m.open)}</td><td>${esc(m.alerts)}</td></tr>`).join("")}</tbody></table>`;
+  const body = `<div class="sheets">${sheet("h2", "Members", table)}</div>`;
   return shell("Members", body, email, chrome, "members", false);
 }
 
@@ -697,6 +820,6 @@ export async function renderMember(db: D1Database, id: string, email: string, no
   const rows = asCards(cards.results);
   const body = `<h2>${esc(m.name)} <small>(${esc(m.role)})</small></h2><p>Not-started alerts in the last 7 days: <b>${esc((ns.results[0] as { n: number }).n)}</b></p>
 ${rows.map((c) => card(c, now, chrome.tz)).join("") || `<p class="empty">No open tasks.</p>`}
-<h3>Timeline</h3><table>${(ups.results as Record<string, unknown>[]).map((x) => `<tr><td>${fmt(Number(x.at), chrome.tz)}</td><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a></td><td>${esc(x.status_from ?? "")} → ${esc(x.status_to ?? "")}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>`;
+<h3>Timeline</h3><div class="sheet-scroll"><table><thead><tr><th>When</th><th>Task</th><th>Status</th><th>Note</th></tr></thead><tbody>${(ups.results as Record<string, unknown>[]).map((x) => `<tr><td>${fmt(Number(x.at), chrome.tz)}</td><td><a href="/t/${esc(x.task_code)}">${esc(x.task_code)}</a></td><td>${esc(x.status_from ?? "")} → ${esc(x.status_to ?? "")}</td><td>${esc(x.note)}</td></tr>`).join("")}</tbody></table></div>`;
   return shell(String(m.name), body, email, chrome, "member", false);
 }

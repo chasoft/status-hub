@@ -30,6 +30,11 @@ describe("dashboard shell", () => {
     expect(res.html).toContain('id="new-task"');
     expect(res.html).toContain("All projects");
     expect(res.html).toContain('data-project-link="SCOS"');
+    expect(res.html).toContain("--radius:5px");
+    expect(res.html).not.toContain("999px");
+    expect(res.html).toContain("overflow-x:hidden");
+    expect(res.html).toContain("details.lane[open]{flex:0 1 auto;max-height:100%");
+    expect(res.html).toContain("position:sticky");
     expect(res.html).toContain('data-lock-open="1"');
     expect(res.html).not.toContain('data-lane="SCG"');
     expect(res.html).not.toContain('href="/p/SCG"');
@@ -65,6 +70,10 @@ describe("dashboard shell", () => {
     const source = await script.text();
     expect(source).toContain("status-hub:project");
     expect(source).toContain("status-hub:lanes");
+    expect(source).toContain("status-hub:task-tab");
+    expect(source).toContain("data-inline-edit");
+    expect(source).toContain("replaceWith");
+    expect(source).toContain("metaKey");
     expect(source).toContain("/api/board");
     expect(source).toContain("showModal");
 
@@ -100,6 +109,21 @@ describe("dashboard shell", () => {
     expect(html).toContain('id="task-detail"');
     expect(html).toContain("fragment task");
     expect(html).toContain("Time in status");
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('data-tab="overview"');
+    expect(html).toContain('data-tab="timeline"');
+    expect(html).toContain('data-tab="history"');
+    expect(html).toContain('data-tab="blockers"');
+    expect(html).not.toContain('data-tab="feedback"');
+    expect(html).toContain('class="feedback-dock"');
+    expect(html).toContain('rows="1"');
+    expect(html).toContain('data-inline-edit');
+    expect(html).toContain('name="pr_url"');
+    expect(html).toContain('<span class="ie-form" hidden>');
+    const timeline = await worker.fetch(`${UI}/t/${task.code}?tab=timeline`, { headers });
+    const timelineHtml = await timeline.text();
+    expect(timelineHtml).toContain('data-tab="timeline" aria-selected="true"');
+    expect(timelineHtml).toContain('id="panel-overview" class="task-panel" data-tab-panel="overview" aria-labelledby="tab-overview" hidden');
     expect(html.toLowerCase()).not.toContain("<!doctype");
     expect(html).not.toContain('class="sidebar"');
     expect(html).not.toContain("<script");

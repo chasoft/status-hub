@@ -422,6 +422,43 @@ export async function assignTask(db: D1Database, actor: Member, p: { task: strin
   return { code: t.code, status: t.status, assignee: p.assignee };
 }
 
+/** Set or clear reviewer_id without a status change. Assignee or a leader. */
+export async function setReviewer(db: D1Database, actor: Member, p: { task: string; reviewer: string }, now = Date.now()) {
+  const t = await getTaskRow(db, p.task);
+  if (!canTouchTask(actor, t)) throw new AppError("FORBIDDEN", "chỉ người được giao (hoặc pm/po/lead/admin) được sửa task này");
+  const raw = p.reviewer.trim();
+  const reviewer = raw ? (await getMember(db, raw)).id : null;
+  await db.batch([
+    db.prepare("UPDATE tasks SET reviewer_id = ?, last_update_at = ? WHERE code = ?").bind(reviewer, now, t.code),
+    db.prepare("INSERT INTO updates (task_code, member_id, at, status_from, status_to, note) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(t.code, actor.id, now, t.status, t.status, reviewer ? `reviewer ${reviewer}` : "bỏ reviewer"),
+  ]);
+  return { code: t.code, reviewer_id: reviewer };
+}
+
+/** Set or clear due_at (epoch ms). Assignee or a leader. */
+export async function setDueAt(db: D1Database, actor: Member, p: { task: string; due_at: number | null }, now = Date.now()) {
+  const t = await getTaskRow(db, p.task);
+  if (!canTouchTask(actor, t)) throw new AppError("FORBIDDEN", "chỉ người được giao (hoặc pm/po/lead/admin) được sửa task này");
+  if (p.due_at != null && (!Number.isInteger(p.due_at) || p.due_at < 0)) throw new AppError("BAD_REQUEST", "due_at must be epoch ms");
+  await db.batch([
+    db.prepare("UPDATE tasks SET due_at = ?, last_update_at = ? WHERE code = ?").bind(p.due_at, now, t.code),
+    db.prepare("INSERT INTO updates (task_code, member_id, at, status_from, status_to, note) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(t.code, actor.id, now, t.status, t.status, p.due_at == null ? "bỏ hạn" : "cập nhật hạn"),
+  ]);
+  return { code: t.code, due_at: p.due_at };
+}
+
+/** Leader edit of a feature's priority. */
+export async function setFeaturePriority(db: D1Database, actor: Member, p: { feature: string; priority: string }) {
+  requireLeader(actor, "set priority");
+  if (!/^P[0-3]$/.test(p.priority)) throw new AppError("BAD_REQUEST", "priority P0..P3");
+  const f = await db.prepare("SELECT code, project_code FROM features WHERE code = ?").bind(p.feature).first<{ code: string; project_code: string }>();
+  if (!f) throw new AppError("NOT_FOUND", `không có feature '${p.feature}'`);
+  await db.prepare("UPDATE features SET priority = ? WHERE code = ?").bind(p.priority, f.code).run();
+  return { code: f.code, project_code: f.project_code, priority: p.priority };
+}
+
 // ---------- reporting
 
 export async function reportStatus(db: D1Database, actor: Member, p: {

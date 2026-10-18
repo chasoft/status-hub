@@ -10,6 +10,89 @@ export const DASHBOARD_JS = `
   let applyingLanes = false;
   let drawerSilent = false;
   let switcherIndex = 0;
+  const TAB_KEY = "status-hub:task-tab";
+  const TABS = ["overview", "timeline", "history", "blockers"];
+
+  function knownTab(value) {
+    return TABS.indexOf(value) !== -1 ? value : "";
+  }
+  function rememberedTab() {
+    return knownTab(storageGet(TAB_KEY) || "") || "overview";
+  }
+  function applyTaskTab(root, writeUrl) {
+    if (!root) return "overview";
+    const urlTab = knownTab(new URLSearchParams(location.search).get("tab") || "");
+    const name = urlTab || rememberedTab();
+    root.querySelectorAll("[role='tab']").forEach((tab) => {
+      const on = tab.getAttribute("data-tab") === name;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+    });
+    root.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+      const on = panel.getAttribute("data-tab-panel") === name;
+      panel.classList.toggle("is-on", on);
+      if (on) panel.removeAttribute("hidden");
+      else panel.setAttribute("hidden", "");
+    });
+    storageSet(TAB_KEY, name);
+    if (writeUrl && location.pathname.indexOf("/t/") === 0) {
+      const url = new URL(location.href);
+      if (url.searchParams.get("tab") !== name) {
+        url.searchParams.set("tab", name);
+        url.searchParams.delete("fragment");
+        history.replaceState(history.state, "", url.pathname + "?" + url.searchParams.toString());
+      }
+    }
+    const full = document.getElementById("drawer-full");
+    if (full instanceof HTMLAnchorElement && full.pathname.indexOf("/t/") === 0) {
+      full.search = "?tab=" + encodeURIComponent(name);
+    }
+    return name;
+  }
+  function escText(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  }
+  function externalHtml(href) {
+    const safe = escText(href);
+    if (!/^https?:\\/\\//i.test(href)) return safe;
+    return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + safe + '<span class="ext-icon"><svg class="ext" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 2.5H2.5v7h7V7.5M6.5 2.5h3v3M9.5 2.5 5.5 6.5"/></svg><span class="sr"> (opens in a new tab)</span></span></a>';
+  }
+  function paintValue(form, value) {
+    const slot = form.querySelector(".ie-value");
+    if (!slot) return;
+    const kind = form.getAttribute("data-inline-kind") || "text";
+    if (!value) {
+      slot.textContent = "—";
+      return;
+    }
+    if (kind === "url") slot.innerHTML = externalHtml(value);
+    else if (kind === "links") {
+      const parts = value.split(/\\s+/).filter(Boolean);
+      slot.innerHTML = parts.length ? parts.map(externalHtml).join("<br>") : "—";
+    } else slot.textContent = value;
+  }
+  function closeEdit(form, restore) {
+    form.classList.remove("is-editing", "is-saving");
+    const view = form.querySelector(".ie-view");
+    const editor = form.querySelector(".ie-form");
+    const msg = form.querySelector(".ie-msg");
+    if (view) view.hidden = false;
+    if (editor) editor.hidden = true;
+    if (msg) msg.textContent = "";
+    if (restore) {
+      const field = form.querySelector("input, select, textarea");
+      if (field && field.hasAttribute("data-original")) field.value = field.getAttribute("data-original") || "";
+    }
+  }
+  function openEdit(form) {
+    form.classList.add("is-editing");
+    const view = form.querySelector(".ie-view");
+    const editor = form.querySelector(".ie-form");
+    if (view) view.hidden = true;
+    if (editor) editor.hidden = false;
+    const field = form.querySelector("input, select, textarea");
+    if (field instanceof HTMLElement) field.focus();
+  }
 
   function storageGet(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -113,12 +196,22 @@ export const DASHBOARD_JS = `
   function syncCell(cell, cards) {
     const scroll = cell.scrollTop;
     const existing = new Map();
-    cell.querySelectorAll("a.card").forEach((node) => existing.set(node.dataset.code || "", node));
+    cell.querySelectorAll(":scope > a.card").forEach((node) => {
+      const code = node.dataset.code || "";
+      const prev = existing.get(code);
+      if (prev) prev.remove();
+      existing.set(code, node);
+    });
     const seen = new Set();
     for (const card of cards) {
       seen.add(card.code);
       let node = existing.get(card.code);
-      if (!node || node.dataset.rev !== card.rev) node = htmlElement(card.html);
+      if (!node || node.dataset.rev !== String(card.rev)) {
+        const fresh = htmlElement(card.html);
+        if (node && fresh) node.replaceWith(fresh);
+        else if (fresh) cell.appendChild(fresh);
+        node = fresh || node;
+      }
       if (node) cell.appendChild(node);
     }
     existing.forEach((node, code) => {
@@ -223,19 +316,24 @@ export const DASHBOARD_JS = `
     const full = document.getElementById("drawer-full");
     const title = document.getElementById("drawer-title");
     if (!(dlg instanceof HTMLDialogElement) || !slot) return;
-    if (full instanceof HTMLAnchorElement) full.href = path;
+    const preferred = knownTab(raw.searchParams.get("tab") || "");
+    const tab = preferred || rememberedTab();
+    const shown = path + "?tab=" + encodeURIComponent(tab);
+    if (full instanceof HTMLAnchorElement) full.href = shown;
     if (title) title.textContent = code;
     slot.textContent = "Loading…";
     if (!dlg.open) dlg.showModal();
-    if (push) history.pushState({ hub: 1, drawer: code }, "", path);
+    if (push) history.pushState({ hub: 1, drawer: code }, "", shown);
     try {
-      const res = await fetch(path + "?fragment=1", { headers: { accept: "text/html" } });
+      const res = await fetch(path + "?fragment=1&tab=" + encodeURIComponent(tab), { headers: { accept: "text/html" } });
       if (!res.ok) {
         slot.textContent = "This task could not be loaded.";
         return;
       }
       slot.innerHTML = await res.text();
-      const focus = slot.querySelector("h2, a, button, input, textarea");
+      const root = slot.querySelector(".task");
+      if (root) applyTaskTab(root, false);
+      const focus = slot.querySelector("[role='tab'][aria-selected='true']");
       if (focus instanceof HTMLElement) focus.focus();
     } catch (err) {
       slot.textContent = "This task could not be loaded.";
@@ -294,6 +392,32 @@ export const DASHBOARD_JS = `
       return;
     }
 
+    const pen = target.closest("[data-inline-open]");
+    if (pen) {
+      const form = pen.closest("[data-inline-edit]");
+      if (form) openEdit(form);
+      return;
+    }
+    const cancelEdit = target.closest("[data-inline-cancel]");
+    if (cancelEdit) {
+      const form = cancelEdit.closest("[data-inline-edit]");
+      if (form) closeEdit(form, true);
+      return;
+    }
+    const tabLink = target.closest("[role='tab']");
+    if (tabLink && !modified) {
+      const root = tabLink.closest(".task");
+      if (root) {
+        event.preventDefault();
+        const name = knownTab(tabLink.getAttribute("data-tab") || "") || "overview";
+        const url = new URL(tabLink.href, location.origin);
+        history.replaceState(history.state, "", url.pathname + "?tab=" + encodeURIComponent(name));
+        applyTaskTab(root, false);
+        if (tabLink instanceof HTMLElement) tabLink.focus();
+      }
+      return;
+    }
+
     const card = target.closest("a.card");
     if (card instanceof HTMLAnchorElement && card.origin === location.origin) {
       event.preventDefault();
@@ -302,6 +426,41 @@ export const DASHBOARD_JS = `
   });
 
   document.addEventListener("keydown", (event) => {
+    const editing = event.target instanceof Element ? event.target.closest(".inline-edit.is-editing") : null;
+    if (editing && event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeEdit(editing, true);
+      return;
+    }
+    if (editing && event.key === "Enter" && event.target instanceof HTMLSelectElement) {
+      event.preventDefault();
+      const form = event.target.form;
+      if (form) form.requestSubmit();
+      return;
+    }
+    if (event.target instanceof HTMLTextAreaElement && event.target.closest(".feedback-dock") && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      const form = event.target.form;
+      if (form) form.requestSubmit();
+      return;
+    }
+    const tabEl = event.target instanceof Element ? event.target.closest("[role='tab']") : null;
+    if (tabEl && (event.key === "ArrowRight" || event.key === "ArrowLeft" || event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End")) {
+      const list = tabEl.closest("[role='tablist']");
+      if (list) {
+        const tabs = Array.from(list.querySelectorAll("[role='tab']"));
+        let index = tabs.indexOf(tabEl);
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") index = (index + 1) % tabs.length;
+        else if (event.key === "ArrowLeft" || event.key === "ArrowUp") index = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") index = 0;
+        else index = tabs.length - 1;
+        event.preventDefault();
+        const next = tabs[index];
+        if (next instanceof HTMLElement) next.click();
+        return;
+      }
+    }
     const key = event.key.toLowerCase();
     if ((event.metaKey || event.ctrlKey) && key === "k") {
       const dlg = document.getElementById("switcher");
@@ -340,6 +499,15 @@ export const DASHBOARD_JS = `
     });
   }
 
+  document.addEventListener("cancel", (event) => {
+    const dlg = event.target;
+    if (!(dlg instanceof HTMLDialogElement)) return;
+    const editing = dlg.querySelector(".inline-edit.is-editing");
+    if (!editing) return;
+    event.preventDefault();
+    closeEdit(editing, true);
+  }, true);
+
   const drawer = document.getElementById("drawer");
   if (drawer instanceof HTMLDialogElement) {
     drawer.addEventListener("close", () => {
@@ -356,14 +524,37 @@ export const DASHBOARD_JS = `
       dlg.close();
       drawerSilent = false;
     } else if (code && !dlg.open) {
-      openDrawer("/t/" + encodeURIComponent(code), false);
+      openDrawer(location.pathname + location.search, false);
     }
   });
+  if (page === "task") applyTaskTab(document.querySelector("main .task"), true);
   if (!history.state) history.replaceState({ hub: 1 }, "");
 
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
+    if (form.hasAttribute("data-inline-edit")) {
+      event.preventDefault();
+      const field = form.querySelector("input, select, textarea");
+      const msg = form.querySelector(".ie-msg");
+      form.classList.add("is-saving");
+      if (msg) msg.textContent = "Saving…";
+      fetch(form.action, { method: "POST", body: new FormData(form), headers: { accept: "application/json" } })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || "Could not save");
+          const value = field && "value" in field ? String(field.value) : "";
+          if (field) field.setAttribute("data-original", value);
+          paintValue(form, value.trim());
+          closeEdit(form, false);
+          if (page === "board") poll();
+        })
+        .catch((err) => {
+          form.classList.remove("is-saving");
+          if (msg) msg.textContent = err instanceof Error ? err.message : "Could not save";
+        });
+      return;
+    }
     if (form.getAttribute("action") !== "/logout") return;
     if (form.dataset.confirmed === "1") return;
     const dlg = document.getElementById("confirm");
