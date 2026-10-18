@@ -3,6 +3,8 @@ export const DASHBOARD_JS = `
 (() => {
   const PROJECT_KEY = "status-hub:project";
   const LANE_KEY = "status-hub:lanes";
+  const GROUP_KEY = "status-hub:groups";
+  const VIEW_KEY = "status-hub:view";
   const body = document.body;
   if (!body || !body.classList.contains("app")) return;
 
@@ -131,20 +133,92 @@ export const DASHBOARD_JS = `
     saveLanes(map);
   }
 
+  let applyingGroups = false;
+  function groupMap() {
+    try {
+      const parsed = JSON.parse(storageGet(GROUP_KEY) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+  function saveGroups(map) {
+    storageSet(GROUP_KEY, JSON.stringify(map));
+  }
+  function applyGroups() {
+    applyingGroups = true;
+    const map = groupMap();
+    document.querySelectorAll("details.group[data-group]").forEach((el) => {
+      const id = el.getAttribute("data-group");
+      if (id && map[id]) el.open = false;
+    });
+    document.querySelectorAll("tbody.fg[data-group]").forEach((el) => {
+      const id = el.getAttribute("data-group");
+      const collapsed = !!(id && map[id]);
+      el.classList.toggle("is-collapsed", collapsed);
+      const btn = el.querySelector("[data-group-toggle]");
+      if (btn) btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    });
+    applyingGroups = false;
+  }
+  function rememberGroup(node) {
+    if (applyingGroups) return;
+    const id = node.getAttribute("data-group");
+    if (!id) return;
+    const map = groupMap();
+    const collapsed = node.classList.contains("fg") ? node.classList.contains("is-collapsed") : !node.open;
+    if (collapsed) map[id] = 1;
+    else delete map[id];
+    saveGroups(map);
+  }
+  function setGroups(open) {
+    const map = groupMap();
+    applyingGroups = true;
+    document.querySelectorAll("details.group[data-group]").forEach((el) => {
+      el.open = open;
+      const id = el.getAttribute("data-group");
+      if (!id) return;
+      if (open) delete map[id];
+      else map[id] = 1;
+    });
+    document.querySelectorAll("tbody.fg[data-group]").forEach((el) => {
+      el.classList.toggle("is-collapsed", !open);
+      const btn = el.querySelector("[data-group-toggle]");
+      if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+      const id = el.getAttribute("data-group");
+      if (!id) return;
+      if (open) delete map[id];
+      else map[id] = 1;
+    });
+    applyingGroups = false;
+    saveGroups(map);
+  }
+
   if (page === "board") {
     const params = new URLSearchParams(location.search);
+    const view = params.get("view");
+    let replace = false;
+    if (view === "table" || view === "board") storageSet(VIEW_KEY, view);
+    else if (storageGet(VIEW_KEY) === "table") {
+      params.set("view", "table");
+      replace = true;
+    }
     if (params.has("project")) {
       storageSet(PROJECT_KEY, params.get("project") || "");
     } else {
       const saved = storageGet(PROJECT_KEY);
       if (saved) {
         params.set("project", saved);
-        const next = params.toString();
-        location.replace(next ? location.pathname + "?" + next : location.pathname);
-        return;
+        replace = true;
       }
     }
+    if (replace) {
+      const next = params.toString();
+      location.replace(next ? location.pathname + "?" + next : location.pathname);
+      return;
+    }
     applyLanes();
+    applyGroups();
   }
 
   function projectLinks() {
@@ -193,10 +267,65 @@ export const DASHBOARD_JS = `
     return tpl.content.firstElementChild;
   }
 
+  function regroupCell(cell) {
+    const cards = Array.from(cell.querySelectorAll("a.card"));
+    const remembered = groupMap();
+    const openNow = {};
+    cell.querySelectorAll("details.group").forEach((node) => {
+      openNow[node.getAttribute("data-group") || ""] = node.open;
+    });
+    const buckets = new Map();
+    cards.forEach((card) => {
+      const code = card.getAttribute("data-feature") || "";
+      if (!buckets.has(code)) buckets.set(code, []);
+      buckets.get(code).push(card);
+    });
+    cards.forEach((card) => card.remove());
+    cell.querySelectorAll("details.group").forEach((node) => node.remove());
+    const seen = new Set();
+    const status = cell.getAttribute("data-status") || "";
+    cards.forEach((card) => {
+      const code = card.getAttribute("data-feature") || "";
+      const list = buckets.get(code) || [card];
+      if (list.length < 2) {
+        cell.appendChild(card);
+        return;
+      }
+      if (seen.has(code)) return;
+      seen.add(code);
+      const id = "board:" + status + ":" + code;
+      const details = document.createElement("details");
+      details.className = "group";
+      details.setAttribute("data-group", id);
+      details.setAttribute("data-feature", code);
+      const tint = list[0].getAttribute("data-tint") || "";
+      if (tint) details.setAttribute("style", tint);
+      const summary = document.createElement("summary");
+      const chev = document.createElement("span");
+      chev.className = "chev";
+      chev.setAttribute("aria-hidden", "true");
+      const codeEl = document.createElement("span");
+      codeEl.className = "code";
+      codeEl.textContent = code;
+      const titleEl = document.createElement("span");
+      titleEl.className = "gtitle";
+      titleEl.textContent = list[0].getAttribute("data-feature-title") || code;
+      const countEl = document.createElement("span");
+      countEl.className = "gcount";
+      countEl.textContent = String(list.length);
+      summary.append(chev, codeEl, titleEl, countEl);
+      details.appendChild(summary);
+      list.forEach((item) => details.appendChild(item));
+      const collapsed = remembered[id] || openNow[id] === false;
+      details.open = !collapsed;
+      cell.appendChild(details);
+    });
+  }
+
   function syncCell(cell, cards) {
     const scroll = cell.scrollTop;
     const existing = new Map();
-    cell.querySelectorAll(":scope > a.card").forEach((node) => {
+    cell.querySelectorAll("a.card").forEach((node) => {
       const code = node.dataset.code || "";
       const prev = existing.get(code);
       if (prev) prev.remove();
@@ -217,6 +346,7 @@ export const DASHBOARD_JS = `
     existing.forEach((node, code) => {
       if (!seen.has(code)) node.remove();
     });
+    regroupCell(cell);
     cell.scrollTop = scroll;
   }
 
@@ -342,8 +472,9 @@ export const DASHBOARD_JS = `
 
   document.addEventListener("toggle", (event) => {
     const node = event.target;
-    if (!(node instanceof HTMLDetailsElement) || !node.classList.contains("lane")) return;
-    rememberLane(node);
+    if (!(node instanceof HTMLDetailsElement)) return;
+    if (node.classList.contains("lane")) rememberLane(node);
+    else if (node.classList.contains("group")) rememberGroup(node);
   }, true);
 
   document.addEventListener("click", (event) => {
@@ -364,6 +495,37 @@ export const DASHBOARD_JS = `
         if (code) map[code] = open;
       });
       saveLanes(map);
+      return;
+    }
+
+    const groupsBtn = target.closest("[data-groups]");
+    if (groupsBtn) {
+      setGroups(groupsBtn.getAttribute("data-groups") === "open");
+      return;
+    }
+
+    const groupToggle = target.closest("[data-group-toggle]");
+    if (groupToggle) {
+      const body = groupToggle.closest("tbody.fg");
+      if (body) {
+        const collapsed = !body.classList.contains("is-collapsed");
+        body.classList.toggle("is-collapsed", collapsed);
+        groupToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        rememberGroup(body);
+      }
+      return;
+    }
+
+    const row = target.closest("tr.task-row");
+    if (row) {
+      const interactive = target.closest("a,button,input,select,textarea,label");
+      const rowLink = interactive instanceof HTMLAnchorElement && interactive.classList.contains("rowmain");
+      if (interactive && !rowLink) return;
+      const link = row.querySelector("a.rowmain");
+      if (link instanceof HTMLAnchorElement) {
+        event.preventDefault();
+        openDrawer(link.getAttribute("href") || link.href, true);
+      }
       return;
     }
 

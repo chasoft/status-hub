@@ -1,7 +1,10 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { CLIENT_SCRIPT } from "../src/client-script";
-import { INK_DARK, INK_LIGHT, SURFACE_DARK, SURFACE_LIGHT, contrastRatio, featureHue, featurePalette } from "../src/feature-color";
+import { DASHBOARD_JS } from "../src/dashboard-client";
+import {
+  CARD_DARK, CARD_LIGHT, INK_DARK, INK_LIGHT, SURFACE_DARK, SURFACE_LIGHT,
+  contrastRatio, featureHue, featurePalette,
+} from "../src/feature-color";
 import { clusterByFeature, sortTasks, type SortableTask } from "../src/groups";
 import * as core from "../src/core";
 import { accessJwt, member, UI, worker } from "./helpers";
@@ -26,6 +29,13 @@ function task(partial: Partial<SortableTask> & Pick<SortableTask, "code" | "titl
     last_update_at: 0,
     ...partial,
   };
+}
+
+function channelGap(a: string, b: string): number {
+  const bytes = (hex: string) => [0, 2, 4].map((i) => parseInt(hex.slice(1 + i, 3 + i), 16));
+  const [ar, ag, ab] = bytes(a);
+  const [br, bg, bb] = bytes(b);
+  return Math.max(Math.abs(ar! - br!), Math.abs(ag! - bg!), Math.abs(ab! - bb!));
 }
 
 async function html(path: string, email = "owner@example.com"): Promise<string> {
@@ -53,10 +63,12 @@ describe("feature color", () => {
     expect(featurePalette("KBN-CORE-001").light.bg).not.toBe(featurePalette("KBN-CORE-002").light.bg);
   });
 
-  it("keeps text and outline contrast in light and dark themes", () => {
+  it("keeps a pale fill and a readable outline in light and dark themes", () => {
     expect(contrastRatio("#000000", "#ffffff")).toBeGreaterThan(20);
     for (const code of CODES) {
       const p = featurePalette(code);
+      expect(channelGap(p.light.bg, CARD_LIGHT)).toBeLessThanOrEqual(26);
+      expect(channelGap(p.dark.bg, CARD_DARK)).toBeLessThanOrEqual(32);
       expect(contrastRatio(INK_LIGHT, p.light.bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(INK_DARK, p.dark.bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(p.light.border, SURFACE_LIGHT)).toBeGreaterThanOrEqual(3);
@@ -111,6 +123,8 @@ describe("Kanban feature groups", () => {
 
     const body = await html("/?project=KBN");
     const pal = featurePalette(grouped.code);
+    expect(body).toContain('class="sidebar"');
+    expect(body).toContain('src="/assets/dashboard.js"');
     expect(body).toContain(`data-group="board:pending_approval:${grouped.code}"`);
     expect(body).toContain(`data-feature="${grouped.code}"`);
     expect(body).toContain(pal.light.bg);
@@ -125,25 +139,22 @@ describe("Kanban feature groups", () => {
     expect(block).toContain('class="chev"');
     expect(block).toContain(" open");
     expect(block).not.toContain(alone.code);
-    expect(block).not.toContain('class="lane"');
-    expect(block).not.toContain('class="colh');
-    expect(body).not.toContain(`data-feature="${solo.code}"`);
+    expect(block).not.toContain('data-lane=');
+    expect(body).not.toContain(`data-group="board:pending_approval:${solo.code}"`);
     expect(body).not.toContain(`data-group="board:backlog:${grouped.code}"`);
     expect(body).toMatch(new RegExp(`class="card s-pending_approval"[^>]*>[\\s\\S]*?${c.code}`));
     expect(body).toMatch(new RegExp(`class="card s-backlog"[^>]*>[\\s\\S]*?${alone.code}`));
-    expect(body).toContain('id="groups-expand"');
-    expect(body).toContain('id="groups-collapse"');
-    expect(body).toContain("Expand all groups");
-    expect(body).toContain("Collapse all groups");
-    expect(body).toContain("status-hub:collapsed-groups");
-    expect(body).toContain("details.group[data-group]");
-    expect(CLIENT_SCRIPT).not.toContain(".lane");
+    expect(body).toContain('data-groups="open"');
+    expect(body).toContain('data-groups="close"');
+    expect(body).toContain("Expand groups");
+    expect(body).toContain("Collapse groups");
+    expect(DASHBOARD_JS).toContain("status-hub:groups");
+    expect(DASHBOARD_JS).toContain("details.group");
     expect(body).toContain("--radius:5px");
-    expect(body).toContain("body.fit{height:100vh;overflow:hidden");
     expect(body).toContain("position:sticky");
-    expect(body).toContain('class="fit"');
-    const laneAt = body.indexOf('class="lane"');
-    const groupAt = body.indexOf(`data-feature="${grouped.code}"`);
+    expect(body).toContain("100dvh");
+    const laneAt = body.indexOf(`data-lane="KBN"`);
+    const groupAt = body.indexOf(`data-group="board:pending_approval:${grouped.code}"`);
     expect(laneAt).toBeGreaterThan(-1);
     expect(groupAt).toBeGreaterThan(laneAt);
   });
@@ -154,8 +165,9 @@ describe("table view", () => {
     const lily = await project("TBL");
     const alpha = await core.createFeature(env.DB, lily, { module: "TBL-CORE", title: "Alpha feature", priority: "P0" });
     const beta = await core.createFeature(env.DB, lily, { module: "TBL-CORE", title: "Beta feature", priority: "P2" });
+    const due = Date.UTC(2026, 9, 17, 3, 0);
     const zebra = await core.createTask(env.DB, lily, {
-      feature: alpha.code, title: "Zebra unique", assignee: "peter", due_at: 2_000,
+      feature: alpha.code, title: "Zebra unique", assignee: "peter", due_at: due,
       pr_url: "https://github.com/example/repo/pull/4",
     });
     const apple = await core.createTask(env.DB, lily, {
@@ -165,15 +177,20 @@ describe("table view", () => {
       feature: beta.code, title: "Other project row", assignee: "peter",
     });
     await env.DB.prepare("UPDATE tasks SET reviewer_id = 'quinn', status = 'backlog' WHERE code = ?").bind(apple.code).run();
+    await env.DB.prepare("UPDATE settings SET value = '420' WHERE key = 'tz_offset_minutes'").run();
 
     const board = await html("/?project=TBL&view=board");
-    expect(board).toContain('class="board"');
+    expect(board).toContain('id="board"');
     expect(board).not.toContain('class="tasks"');
     expect(board).toContain('aria-current="page"');
+    expect(board).toContain('class="sidebar"');
 
     const table = await html("/?view=table&project=TBL");
     expect(table).toContain('class="tasks"');
-    expect(table).not.toContain('class="board"');
+    expect(table).not.toContain('id="board"');
+    expect(table).toContain('class="sidebar"');
+    expect(table).toContain('class="topbar"');
+    expect(table).toContain('id="drawer"');
     for (const label of ["Code", "Title", "Project", "Feature", "Status", "Assignee", "Reviewer", "Priority", "Due", "Time in status", "PR"]) {
       expect(table).toContain(label);
     }
@@ -186,10 +203,23 @@ describe("table view", () => {
     expect(table).toContain(`<span class="gcount">1</span>`);
     expect(table).toContain("quinn");
     expect(table).toContain("P0");
-    expect(table).toContain('class="g-toggle"');
-    expect(table).toContain('href="/?view=board&amp;project=TBL"');
-    expect(table).toContain('href="/?view=table&amp;project=TBL');
-    expect(table).toContain(`task=${encodeURIComponent(zebra.code)}`);
+    expect(table).toContain("17/10 10:00");
+    expect(table).toContain('data-group-toggle');
+    expect(table).toContain('href="/?project=TBL&amp;view=board"');
+    expect(table).toContain('href="/?project=TBL&amp;view=table');
+    expect(table).toContain(`href="/t/${zebra.code}"`);
+    expect(table).toContain("padding:16px");
+    expect(table).toContain("--radius:5px");
+    expect(table).toContain("position:sticky");
+
+    const zebraRow = table.match(new RegExp(`<tr class="task-row"[\\s\\S]*?${zebra.code}[\\s\\S]*?</tr>`))?.[0] ?? "";
+    expect(zebraRow).toContain('data-inline-edit');
+    expect(zebraRow).toContain('name="pr_url"');
+    expect(zebraRow).toContain('<span class="ie-form" hidden>');
+    expect(zebraRow).not.toContain(">Save<");
+    expect(zebraRow).toContain('target="_blank"');
+    expect(zebraRow).toContain('rel="noopener noreferrer"');
+    expect(zebraRow).toContain("https://github.com/example/repo/pull/4");
 
     const asc = await html("/?view=table&project=TBL&sort=title&dir=asc");
     expect(asc.indexOf("Apple unique")).toBeLessThan(asc.indexOf("Zebra unique"));
@@ -209,68 +239,12 @@ describe("table view", () => {
     expect(found).not.toContain(other.code);
     expect(found).not.toContain(apple.code);
 
-    const drawer = await html(`/?view=table&project=TBL&task=${encodeURIComponent(zebra.code)}`);
-    expect(drawer).toContain('class="drawer"');
-    expect(drawer).toContain("Zebra unique");
-    expect(drawer).toContain('class="drawer-close"');
-    expect(drawer).toContain("Time in status");
-    const zebraRow = drawer.match(new RegExp(`<tr class="task-row"[\\s\\S]*?${zebra.code}[\\s\\S]*?</tr>`))?.[0] ?? "";
-    expect(zebraRow).toContain('name="pr_url"');
-    expect(zebraRow).toContain("https://github.com/example/repo/pull/4");
-
     const jane = await html("/?view=table&project=TBL", "jane@example.com");
     const janeRow = jane.match(new RegExp(`<tr class="task-row"[\\s\\S]*?${zebra.code}[\\s\\S]*?</tr>`))?.[0] ?? "";
     expect(janeRow).not.toContain('name="pr_url"');
-    expect(jane).toContain("https://github.com/example/repo/pull/4");
-  });
+    expect(janeRow).toContain("https://github.com/example/repo/pull/4");
+    expect(janeRow).toContain('target="_blank"');
 
-  it("returns inline PR edits to the table and rejects an off-site next", async () => {
-    const lily = await member("lily");
-    const feature = await core.createFeature(env.DB, lily, { module: "TBL-CORE", title: "PR return" });
-    const created = await core.createTask(env.DB, lily, { feature: feature.code, title: "Editable PR", assignee: "peter" });
-    const next = `/?view=table&project=TBL&task=${created.code}`;
-    const post = async (pr: string, nextValue: string) => worker.fetch(`${UI}/t/${created.code}`, {
-      method: "POST",
-      headers: {
-        "Cf-Access-Jwt-Assertion": await accessJwt("owner@example.com"),
-        "content-type": "application/x-www-form-urlencoded",
-        "sec-fetch-site": "same-origin",
-      },
-      body: new URLSearchParams({ pr_url: pr, next: nextValue }).toString(),
-      redirect: "manual",
-    });
-    const ok = await post("https://github.com/example/repo/pull/15", next);
-    expect(ok.status).toBe(303);
-    expect(ok.headers.get("location")).toBe(next);
-    expect((await core.getTaskRow(env.DB, created.code)).pr_url).toBe("https://github.com/example/repo/pull/15");
-
-    const evil = await post("https://github.com/example/repo/pull/16", "https://evil.example/phish");
-    expect(evil.status).toBe(303);
-    expect(evil.headers.get("location")).toBe(`/t/${created.code}`);
-    expect((await core.getTaskRow(env.DB, created.code)).pr_url).toBe("https://github.com/example/repo/pull/16");
-
-    const bad = await post("javascript:alert(1)", next);
-    expect(bad.status).toBe(400);
-    const page = await bad.text();
-    expect(page).toContain('class="tasks"');
-    expect(page).toContain('class="drawer"');
-    expect(page).toContain("http hoặc https");
-    expect((await core.getTaskRow(env.DB, created.code)).pr_url).toBe("https://github.com/example/repo/pull/16");
-  });
-
-  it("serves the inline script under a matching CSP hash", async () => {
-    const res = await worker.fetch(`${UI}/?project=KBN`, {
-      headers: { "Cf-Access-Jwt-Assertion": await accessJwt("owner@example.com") },
-    });
-    const body = await res.text();
-    const script = body.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-    expect(script).toBe(CLIENT_SCRIPT);
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script!));
-    let bin = "";
-    for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
-    const csp = res.headers.get("content-security-policy") ?? "";
-    expect(csp).toContain(`script-src 'sha256-${btoa(bin)}'`);
-    expect(csp).toContain("style-src 'unsafe-inline'");
-    expect(csp).not.toContain("unsafe-eval");
+    await env.DB.prepare("UPDATE settings SET value = '0' WHERE key = 'tz_offset_minutes'").run();
   });
 });

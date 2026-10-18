@@ -6,6 +6,8 @@ All notable changes to Status Hub are documented in this file. The project follo
 
 ### Added
 
+- Kanban columns group tasks that share a feature (two or more in that column) in a pale tint with a 1px outline and a colored header accent. Expand groups and Collapse groups remember each group in the browser. A single task stays a plain card.
+- Table view on the same board (`?view=table`, or Board | Table). One row per task, grouped by feature, sortable, using the project, member, status, and search filters. A row opens the task drawer. Editable cells use the inline editor. Times use the configured timezone.
 - Dashboard UI: viewport shell, project navigator, collapsible swimlanes, task drawer, create-task dialog, and filter popovers. `GET /api/board` polls the board in place. External links open in a new tab. Task detail uses Overview, Timeline, History, and Blockers (`?tab=`). Feedback stays on Overview with the composer pinned to that tab. Editable values use one inline editor. Buttons, inputs, and badges use a 5px radius.
 - `AUTH_MODE=token`: a login page, SHA-256 login tokens in D1 (`ui_login_tokens`), and a signed `HttpOnly` `Secure` `SameSite=Lax` session cookie with logout. `AUTH_MODE=access` is unchanged. `magic-link` is not available.
 - `pnpm run ui-login` (`scripts/gen-ui-login.mjs`) mints a UI login token locally and prints the SQL for the hash.

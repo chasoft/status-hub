@@ -8,7 +8,8 @@ Copyright (c) 2026 Chasoft Labs. MIT License. See [LICENSE](LICENSE).
 
 ## Features
 
-- **Dashboard by status and project.** Columns are statuses. Rows are projects. A project list and a quick switcher choose one swimlane or all of them. Filter by member, status, or search. Cards open in a drawer. The board polls itself instead of reloading the page.
+- **Dashboard by status and project.** Columns are statuses. Rows are projects. A project list and a quick switcher choose one swimlane or all of them. Filter by member, status, or search. Cards open in a drawer. The board polls itself instead of reloading the page. Tasks that share a feature sit in a tinted group inside the column.
+- **Table view.** Board | Table switches the same tasks to a sortable table (`?view=table`). A row opens the task drawer. The choice is remembered in the browser.
 - **Project, module, feature, and task codes.** Feature and task numbers are allocated inside one `db.batch()`, so two creates at the same time cannot take the same code.
 - **Pending approval.** A task waits in `pending_approval` until an admin approves or rejects it.
 - **Reviewer.** A move to `review` names an active member as reviewer when the task does not have one yet.
@@ -30,7 +31,7 @@ The board fills the viewport. On a desktop the page itself does not scroll: each
 
 | Path | Page |
 |---|---|
-| `/` | Board. Columns are statuses, rows are projects. The Done column lists the 10 newest done tasks and links to the full list. |
+| `/` | Board, or a table when `?view=table`. Columns are statuses, rows are projects. The Done column lists the 10 newest done tasks and links to the full list. |
 | `/api/board` | Read-only JSON for the same filters. Requires the same UI login as the board. |
 | `/done` | Every done task for the current project and member filters. |
 | `/new` | Create-task form. The board also opens this form in a dialog. |

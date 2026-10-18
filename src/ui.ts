@@ -1,7 +1,9 @@
 // Server-rendered dashboard. Behaviour lives in /assets/dashboard.js (no inline handlers).
 import { leadershipAuthor, memberForAccessEmail } from "./auth";
 import { getHubConfig, waitingRank } from "./config";
-import { isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type PeriodRow, type Status } from "./core";
+import { isLeader, loadSettings, STATUSES, formatDuration, summarizePeriods, type Member, type PeriodRow, type Status } from "./core";
+import { featurePalette, paletteStyle } from "./feature-color";
+import { clusterByFeature, isSortKey, sortTasks, type SortDir, type SortKey } from "./groups";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -114,15 +116,15 @@ kbd{font:11px ui-monospace,monospace;border:1px solid #ffffff40;border-radius:va
 main{flex:1;min-width:0;min-height:0}
 .page-scroll{overflow:auto;padding:16px 18px 32px}
 .board-main{display:flex;flex-direction:column;overflow:hidden}
-.board-tools{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:8px 12px 0}
+.board-tools{flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:16px 16px 0}
 .board-tools button,.page-scroll button,.dialog-body button,.drawer-body button,.feedback-dock button{padding:5px 10px;border-radius:var(--radius)}
 .stamp{margin-left:auto;color:var(--mut);font-size:12px}
 #board{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow-x:auto;overflow-y:hidden}
 .colheads,.summary,details.lane>summary,.lane-grid{display:grid;grid-template-columns:var(--label) repeat(var(--cols),minmax(160px,1fr));gap:8px;align-items:stretch}
-.colheads{position:sticky;top:0;z-index:1;padding:8px 12px 4px;background:var(--bg)}
+.colheads{position:sticky;top:0;z-index:1;padding:8px 16px 4px;background:var(--bg)}
 .colh{font-weight:650;padding:6px 8px;border-radius:var(--radius);background:var(--cell);display:flex;gap:6px;align-items:center;flex-wrap:wrap;position:sticky;top:0}
 .colhead-label{color:var(--mut);font-size:12px;align-self:center}
-.lanes{flex:1;min-height:0;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;padding:0 12px 12px}
+.lanes{flex:1;min-height:0;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;padding:0 16px 16px}
 details.lane,section.lane{min-height:0;display:flex;flex-direction:column;flex:0 0 auto}
 details.lane[open]{flex:0 1 auto;max-height:100%;overflow:hidden}
 section.lane{flex:1 1 auto;min-height:0;overflow:hidden}
@@ -140,6 +142,33 @@ details.lane:not([open]) .chev{transform:rotate(-90deg)}
 .lane-side{display:flex;align-items:flex-start;padding-top:4px}
 .card{display:block;min-width:0;max-width:100%;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--s);border-radius:var(--radius);padding:8px;margin:0 0 8px;color:inherit;text-decoration:none;box-shadow:0 1px 0 #0000000a;overflow-wrap:anywhere}
 .card:hover{box-shadow:var(--shadow);text-decoration:none}
+.group,.fg{--fg:var(--fg-bg);--fg-line:var(--fg-bd)}
+.group{border:1px solid var(--fg-line);background:var(--fg);border-radius:var(--radius);margin:0 0 8px;padding:4px}
+.group .card{background:var(--fg)}
+.group>summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;border-left:3px solid var(--fg-line);border-radius:var(--radius);padding:2px 4px 4px 8px}
+.group>summary::-webkit-details-marker{display:none}
+.group:not([open])>summary .chev{transform:rotate(-90deg)}
+.group:not([open])>:not(summary){display:none}
+.gtitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gcount{margin-left:auto;font-size:11px;color:var(--mut)}
+.views{display:inline-flex;border:1px solid var(--bd);border-radius:var(--radius);overflow:hidden;background:var(--card)}
+.views a{padding:4px 10px;text-decoration:none;color:var(--tx)}
+.views a[aria-current="page"]{background:var(--accent);color:var(--accent-ink);text-decoration:none}
+.table-frame{flex:1;min-height:0;min-width:0;padding:16px;display:flex;flex-direction:column}
+.table-scroll{flex:1;min-height:0;overflow:auto;border:1px solid var(--bd);border-radius:var(--radius);background:var(--card)}
+table.tasks{width:100%;min-width:1180px;background:transparent}
+table.tasks th,table.tasks td{padding:8px 10px;vertical-align:middle;white-space:nowrap}
+table.tasks td.title{white-space:normal;min-width:14rem}
+table.tasks th{position:sticky;top:0;z-index:3;background:var(--cell)}
+table.tasks th a{color:inherit;text-decoration:none}
+table.tasks a.rowmain{color:inherit}
+.fg .group-head td{background:var(--fg);border-top:1px solid var(--fg-line);box-shadow:inset 3px 0 0 var(--fg-line);font-weight:650}
+.fg .task-row td{background:color-mix(in srgb, var(--fg) 72%, var(--card))}
+.fg.is-collapsed .task-row{display:none}
+.fg.is-collapsed .g-toggle .chev{transform:rotate(-90deg)}
+.g-toggle{display:flex;align-items:center;gap:6px;width:100%;margin:0;padding:2px 0;border:0;background:transparent;text-align:left;cursor:pointer}
+.task-row{cursor:pointer}
+.tasks .inline-edit{max-width:16rem}
 .card-top{display:flex;justify-content:space-between;align-items:center;gap:6px;min-width:0}
 .code{min-width:0;font:12px ui-monospace,monospace;color:var(--mut);overflow-wrap:anywhere}
 .title{display:block;min-width:0;font-weight:650;margin-top:4px;overflow-wrap:anywhere}
@@ -226,7 +255,7 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
   .body{display:block}
   .sidebar{width:auto;max-height:none;border-right:0;border-bottom:1px solid var(--bd);overflow:auto}
   .nav-links{flex-direction:row;flex-wrap:wrap}
-  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell,.task-main,.page-fill,.task,.task-panel,.tab-scroll,.sheet,.sheet-scroll,.feedback-pane{height:auto;max-height:none;overflow:visible;flex:none}
+  main,.board-main,#board,.lanes,details.lane,details.lane[open],section.lane,.lane-grid,.cell,.table-frame,.table-scroll,.task-main,.page-fill,.task,.task-panel,.tab-scroll,.sheet,.sheet-scroll,.feedback-pane{height:auto;max-height:none;overflow:visible;flex:none}
   .cell-label{display:block}
   .colheads{display:none}
   .summary,details.lane>summary{display:flex;flex-wrap:wrap}
@@ -239,6 +268,7 @@ dialog.drawer{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(520px,
 @media (prefers-color-scheme: dark){
   .lead{background:#2a2418}
   .pill-unread{color:#9ec1ff}
+  .group,.fg{--fg:var(--fg-bg-dark);--fg-line:var(--fg-bd-dark)}
 }
 `;
 
@@ -249,6 +279,7 @@ interface Filters {
   member: string;
   status: Status | "";
   q: string;
+  view: "board" | "table";
 }
 
 interface ProjectNav { code: string; name: string; open_n: number; alert_n: number }
@@ -267,7 +298,7 @@ interface CardRow {
   code: string; title: string; status: Status; project_code: string; feature_code: string; feature_title: string;
   assignee_id: string | null; assignee_name: string | null; reviewer_id: string | null; last_update_at: number;
   pr_url: string | null; alerts: string | null; open_blockers: number; waiting_on: string | null;
-  status_since: number | null; unread_feedback: number;
+  status_since: number | null; unread_feedback: number; due_at: number | null; priority: string | null;
 }
 
 export interface BoardJson {
@@ -290,6 +321,7 @@ function readFilters(url: URL): Filters {
     member: url.searchParams.get("member") || "",
     status,
     q: (url.searchParams.get("q") || "").trim().slice(0, 80),
+    view: url.searchParams.get("view") === "table" ? "table" : "board",
   };
 }
 
@@ -301,7 +333,17 @@ function withQuery(path: string, pairs: [string, string][]): string {
 }
 
 function boardHref(f: Filters, project = f.project): string {
-  return withQuery("/", [["project", project], ["member", f.member], ["status", f.status], ["q", f.q]]);
+  return withQuery("/", [
+    ["project", project], ["member", f.member], ["status", f.status], ["q", f.q],
+    ["view", f.view === "table" ? "table" : ""],
+  ]);
+}
+
+function viewHref(f: Filters, view: "board" | "table"): string {
+  return withQuery("/", [
+    ["project", f.project], ["member", f.member], ["status", f.status], ["q", f.q],
+    ["view", view],
+  ]);
 }
 
 function doneHref(f: Filters): string {
@@ -345,13 +387,15 @@ function asCards(rows: unknown[]): CardRow[] {
       unread_feedback: Number(r.unread_feedback) || 0,
       last_update_at: Number(r.last_update_at),
       status_since: r.status_since == null ? null : Number(r.status_since),
+      due_at: r.due_at == null ? null : Number(r.due_at),
+      priority: r.priority ?? null,
     };
   });
 }
 
 const CARD_SQL = `
-SELECT t.code, t.title, t.status, t.project_code, t.feature_code, f.title AS feature_title,
-  t.assignee_id, am.name AS assignee_name, t.reviewer_id, t.last_update_at, t.pr_url,
+SELECT t.code, t.title, t.status, t.project_code, t.feature_code, f.title AS feature_title, f.priority,
+  t.assignee_id, am.name AS assignee_name, t.reviewer_id, t.last_update_at, t.pr_url, t.due_at,
   (SELECT group_concat(a.rule) FROM alerts a WHERE a.task_code = t.code AND a.cleared_at IS NULL) AS alerts,
   (SELECT COUNT(*) FROM blockers b WHERE b.task_code = t.code AND b.resolved_at IS NULL) AS open_blockers,
   (SELECT b.waiting_on FROM blockers b WHERE b.task_code = t.code AND b.resolved_at IS NULL ORDER BY b.opened_at LIMIT 1) AS waiting_on,
@@ -366,8 +410,8 @@ function applyScope(filters: Filters, where: string[], binds: unknown[], withSta
   if (filters.member) { where.push("t.assignee_id = ?"); binds.push(filters.member); }
   if (filters.q) {
     const like = `%${filters.q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
-    where.push("(t.code LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\' OR f.title LIKE ? ESCAPE '\\')");
-    binds.push(like, like, like);
+    where.push("(t.code LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\' OR t.project_code LIKE ? ESCAPE '\\' OR t.feature_code LIKE ? ESCAPE '\\' OR f.title LIKE ? ESCAPE '\\' OR IFNULL(t.assignee_id,'') LIKE ? ESCAPE '\\' OR IFNULL(t.reviewer_id,'') LIKE ? ESCAPE '\\')");
+    binds.push(like, like, like, like, like, like, like);
   }
   if (withStatus && filters.status) { where.push("t.status = ?"); binds.push(filters.status); }
 }
@@ -424,7 +468,8 @@ function card(c: CardRow, now: number, tz: number): string {
   for (const rule of (c.alerts ?? "").split(",").filter(Boolean)) pills.push(`<span class="pill pill-alert">${esc(RULE_LABEL[rule] ?? rule)}</span>`);
   if (c.unread_feedback) pills.push(`<span class="pill pill-unread">Feedback${c.unread_feedback > 1 ? ` ${c.unread_feedback}` : ""}</span>`);
   if (c.pr_url) pills.push(`<span class="pill pill-pr">PR</span>`);
-  return `<a class="card s-${c.status}" href="/t/${encodeURIComponent(c.code)}" data-code="${esc(c.code)}" data-rev="${esc(cardRev(c))}" title="${esc(c.feature_code)} · ${esc(c.feature_title)}"><span class="card-top"><span class="code">${esc(c.code)}</span><span class="avatar" style="background:${avatarColor(c.assignee_id || c.assignee_name || "?")}" title="${esc(c.assignee_name || c.assignee_id || "Unassigned")}" aria-hidden="true">${esc(initials(c.assignee_name, c.assignee_id))}</span></span><span class="title">${esc(c.title)}</span><span class="meta"><span class="dur" title="in this status since ${fmt(since, tz)}">${esc(c.status)} · ${formatDuration(Math.max(0, now - since))}</span><span class="who">${who}</span></span>${pills.length ? `<span class="pills">${pills.join("")}</span>` : ""}</a>`;
+  const tint = paletteStyle(featurePalette(c.feature_code));
+  return `<a class="card s-${c.status}" href="/t/${encodeURIComponent(c.code)}" data-code="${esc(c.code)}" data-rev="${esc(cardRev(c))}" data-feature="${esc(c.feature_code)}" data-feature-title="${esc(c.feature_title)}" data-tint="${esc(tint)}" title="${esc(c.feature_code)} · ${esc(c.feature_title)}"><span class="card-top"><span class="code">${esc(c.code)}</span><span class="avatar" style="background:${avatarColor(c.assignee_id || c.assignee_name || "?")}" title="${esc(c.assignee_name || c.assignee_id || "Unassigned")}" aria-hidden="true">${esc(initials(c.assignee_name, c.assignee_id))}</span></span><span class="title">${esc(c.title)}</span><span class="meta"><span class="dur" title="in this status since ${fmt(since, tz)}">${esc(c.status)} · ${formatDuration(Math.max(0, now - since))}</span><span class="who">${who}</span></span>${pills.length ? `<span class="pills">${pills.join("")}</span>` : ""}</a>`;
 }
 
 function newTaskForm(requesters: string[]): string {
@@ -481,7 +526,7 @@ ${tokenMode ? `<dialog id="confirm" aria-labelledby="confirm-title"><form method
 <button type="button" class="chip" data-dialog-open="switcher" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Switch project">Project <strong>${esc(projectLabel)}</strong> <kbd>⌘K</kbd></button>
 <button type="button" class="chip" popovertarget="pop-member" aria-haspopup="dialog">Member <strong>${esc(memberLabel)}</strong></button>
 <button type="button" class="chip" popovertarget="pop-status" aria-haspopup="dialog">Status <strong>${esc(statusLabel)}</strong></button>
-<form class="search" method="get" action="/" role="search">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("status", f.status)}<input type="search" name="q" value="${esc(f.q)}" placeholder="Search code or title" aria-label="Search tasks"></form>
+<form class="search" method="get" action="/" role="search">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("status", f.status)}${hidden("view", f.view === "table" ? "table" : "")}<input type="search" name="q" value="${esc(f.q)}" placeholder="Search code or title" aria-label="Search tasks"></form>
 <a class="btn primary" href="/new"${page === "new" ? "" : ' data-dialog-open="new-task"'}>New task</a>
 <button type="button" class="chip alerts-btn" popovertarget="pop-alerts" aria-haspopup="dialog">Alerts <span class="count${alertTotal ? " is-on" : ""}" data-alert-total>${alertTotal}</span></button>
 <button type="button" class="user-btn" popovertarget="user-menu" aria-haspopup="dialog"><span class="avatar" aria-hidden="true">${esc(initials(email, email))}</span><span class="uname">${esc(email)}</span></button>
@@ -499,10 +544,10 @@ ${projects}
 <main id="main" class="${board ? "board-main" : page === "task" ? "task-main" : page === "done" || page === "alerts" || page === "members" ? "page-fill" : "page-scroll"}">${main}</main>
 </div>
 </div>
-<div id="pop-member" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("status", f.status)}${hidden("q", f.q)}<label>Member<br><select name="member">${memberOpts}</select></label><p><button>Apply</button></p></form>
+<div id="pop-member" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("status", f.status)}${hidden("q", f.q)}${hidden("view", f.view === "table" ? "table" : "")}<label>Member<br><select name="member">${memberOpts}</select></label><p><button>Apply</button></p></form>
 <ul class="quick">${chrome.members.map((m) => `<li><a href="/m/${esc(m.id)}">${esc(m.name)} <span class="muted">${m.open_n}</span></a></li>`).join("")}</ul>
 <a href="/members">All members</a></div>
-<div id="pop-status" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("q", f.q)}<label>Status<br><select name="status">${statusOpts}</select></label><p><button>Apply</button> <a href="${esc(pendingHref(f.project))}">Pending approval</a> <a href="/">Clear</a></p></form></div>
+<div id="pop-status" popover><form method="get" action="/">${hidden("project", f.project)}${hidden("member", f.member)}${hidden("q", f.q)}${hidden("view", f.view === "table" ? "table" : "")}<label>Status<br><select name="status">${statusOpts}</select></label><p><button>Apply</button> <a href="${esc(pendingHref(f.project))}">Pending approval</a> <a href="${f.view === "table" ? "/?view=table" : "/"}">Clear</a></p></form></div>
 <div id="pop-alerts" popover><p><strong>Open alerts</strong></p><ul class="quick">${chrome.alerts.map((a) => `<li><a href="/alerts">${esc(RULE_LABEL[a.rule] ?? a.rule)} <b>${a.n}</b></a></li>`).join("") || "<li>No open alerts</li>"}</ul><a href="/alerts">View alerts</a></div>
 <div id="user-menu" popover><p class="user-email">${esc(email)}</p><p class="muted">${esc(tzLabel(chrome.tz))}</p>${logout}</div>
 ${dialogs}
@@ -513,6 +558,64 @@ ${dialogs}
 
 function boardSearch(f: Filters): string {
   return withQuery("", [["project", f.project], ["member", f.member], ["status", f.status], ["q", f.q]]).replace(/^\?/, "");
+}
+
+function groupMarkup(id: string, featureCode: string, featureTitle: string, count: number, inner: string, tag: "details" | "tbody"): string {
+  const tint = paletteStyle(featurePalette(featureCode));
+  const head = `<span class="chev" aria-hidden="true"></span><span class="code">${esc(featureCode)}</span><span class="gtitle">${esc(featureTitle)}</span><span class="gcount">${count}</span>`;
+  if (tag === "tbody") {
+    return `<tbody class="fg" data-group="${esc(id)}" data-feature="${esc(featureCode)}" style="${tint}"><tr class="group-head"><td colspan="${TABLE_COLUMNS.length}"><button type="button" class="g-toggle" data-group-toggle aria-expanded="true">${head}</button></td></tr>${inner}</tbody>`;
+  }
+  return `<details class="group" data-group="${esc(id)}" data-feature="${esc(featureCode)}" open style="${tint}"><summary>${head}</summary>${inner}</details>`;
+}
+
+function cellBody(rows: CardRow[], status: string, now: number, tz: number): string {
+  return clusterByFeature(rows, 2).map((item) => {
+    if (item.kind === "task") return card(item.task, now, tz);
+    const id = `board:${status}:${item.feature_code}`;
+    return groupMarkup(id, item.feature_code, item.feature_title, item.tasks.length, item.tasks.map((t) => card(t, now, tz)).join(""), "details");
+  }).join("");
+}
+
+const TABLE_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "code", label: "Code" },
+  { key: "title", label: "Title" },
+  { key: "project", label: "Project" },
+  { key: "feature", label: "Feature" },
+  { key: "status", label: "Status" },
+  { key: "assignee", label: "Assignee" },
+  { key: "reviewer", label: "Reviewer" },
+  { key: "priority", label: "Priority" },
+  { key: "due", label: "Due" },
+  { key: "time", label: "Time in status" },
+  { key: "pr", label: "PR" },
+];
+
+function sortState(url: URL): { key: SortKey; dir: SortDir } {
+  const raw = url.searchParams.get("sort") || "";
+  const key = isSortKey(raw) ? raw : "feature";
+  const dir: SortDir = url.searchParams.get("dir") === "desc" ? "desc" : "asc";
+  return { key, dir };
+}
+
+function sortHref(f: Filters, key: SortKey, current: SortKey, dir: SortDir): string {
+  const next: SortDir = key === current && dir === "asc" ? "desc" : "asc";
+  return withQuery("/", [
+    ["project", f.project], ["member", f.member], ["status", f.status], ["q", f.q],
+    ["view", "table"], ["sort", key], ["dir", next],
+  ]);
+}
+
+function viewSwitcher(f: Filters): string {
+  const board = viewHref(f, "board");
+  const table = viewHref(f, "table");
+  return `<nav class="views" aria-label="View"><a href="${esc(board)}"${f.view === "board" ? ' aria-current="page"' : ""}>Board</a><a href="${esc(table)}"${f.view === "table" ? ' aria-current="page"' : ""}>Table</a></nav>`;
+}
+
+function boardTools(chrome: Chrome, lanes: boolean): string {
+  const groups = `<button type="button" data-groups="open">Expand groups</button><button type="button" data-groups="close">Collapse groups</button>`;
+  const laneBtns = lanes ? `<button type="button" data-lanes="open">Expand all</button><button type="button" data-lanes="close">Collapse all</button>` : "";
+  return `<div class="board-tools">${viewSwitcher(chrome.filters)}${laneBtns}${groups}<span class="stamp" data-poll-stamp></span></div>`;
 }
 
 function renderBoardMain(chrome: Chrome, rows: CardRow[], doneTotal: number, now: number): string {
@@ -526,14 +629,14 @@ function renderBoardMain(chrome: Chrome, rows: CardRow[], doneTotal: number, now
   const laneHtml = lanes.map((p) => {
     const counts = cols.map((s) => `<span class="lane-count" data-count-for="${esc(p.code)}" data-status="${s}" title="${esc(STATUS_LABEL[s])}">${rows.filter((r) => r.project_code === p.code && r.status === s).length}</span>`).join("");
     const label = `<span class="lane-label"><span class="chev" aria-hidden="true"></span><span class="lane-id">${esc(p.code)}</span><span class="lane-name">${esc(p.name)}</span></span>`;
-    const grid = `<div class="lane-grid"><div class="lane-side"><a href="/p/${esc(p.code)}">Project</a></div>${cols.map((s) => `<div class="cell" data-project="${esc(p.code)}" data-status="${s}"><div class="cell-label s-${s}">${esc(STATUS_LABEL[s])}</div>${rows.filter((r) => r.project_code === p.code && r.status === s).map((r) => card(r, now, chrome.tz)).join("")}</div>`).join("")}</div>`;
+    const grid = `<div class="lane-grid"><div class="lane-side"><a href="/p/${esc(p.code)}">Project</a></div>${cols.map((s) => `<div class="cell" data-project="${esc(p.code)}" data-status="${s}"><div class="cell-label s-${s}">${esc(STATUS_LABEL[s])}</div>${cellBody(rows.filter((r) => r.project_code === p.code && r.status === s), s, now, chrome.tz)}</div>`).join("")}</div>`;
     if (single) return `<section class="lane is-fill" data-lane="${esc(p.code)}" data-lock-open="1"><div class="summary">${label}${counts}</div>${grid}</section>`;
     return `<details class="lane" data-lane="${esc(p.code)}"${collapsed ? "" : " open"}><summary>${label}${counts}</summary>${grid}</details>`;
   }).join("");
   const showCancelled = !f.status || f.status === "cancelled";
   const cancelled = rows.filter((r) => r.status === "cancelled");
-  const cancelledBox = showCancelled ? `<details class="cancelled"${f.status === "cancelled" ? " open" : ""}><summary>Cancelled (${cancelled.length})</summary><div class="cancelled-list">${lanes.map((p) => `<div class="cell" data-project="${esc(p.code)}" data-status="cancelled">${cancelled.filter((r) => r.project_code === p.code).map((r) => card(r, now, chrome.tz)).join("")}</div>`).join("")}</div></details>` : "";
-  const tools = `<div class="board-tools">${lanes.length > 1 ? `<button type="button" data-lanes="open">Expand all</button><button type="button" data-lanes="close">Collapse all</button>` : ""}<span class="stamp" data-poll-stamp></span></div>`;
+  const cancelledBox = showCancelled ? `<details class="cancelled"${f.status === "cancelled" ? " open" : ""}><summary>Cancelled (${cancelled.length})</summary><div class="cancelled-list">${lanes.map((p) => `<div class="cell" data-project="${esc(p.code)}" data-status="cancelled">${cellBody(cancelled.filter((r) => r.project_code === p.code), "cancelled", now, chrome.tz)}</div>`).join("")}</div></details>` : "";
+  const tools = boardTools(chrome, lanes.length > 1);
   const empty = lanes.length ? "" : `<p class="empty">No project matches this filter.</p>`;
   return `${tools}<div id="board" class="board${single ? " is-single" : ""}" style="--cols:${cols.length}">${heads}<div class="lanes">${laneHtml}${empty}${cancelledBox}</div></div>`;
 }
@@ -555,9 +658,73 @@ export function renderLogin(error?: string, next?: string): string {
 </main></body>`);
 }
 
+function canEditTask(actor: Member | null, row: CardRow): boolean {
+  return !!actor && (isLeader(actor) || actor.id === row.assignee_id);
+}
+
+function tableRow(t: CardRow, now: number, tz: number, actor: Member | null, members: { value: string; label: string }[]): string {
+  const since = t.status_since ?? t.last_update_at;
+  const canEdit = canEditTask(actor, t);
+  const canAssign = !!actor && isLeader(actor) && t.status !== "done" && t.status !== "cancelled" && t.status !== "pending_approval";
+  const leader = !!actor && isLeader(actor);
+  const action = `/t/${encodeURIComponent(t.code)}`;
+  const priorities = ["P0", "P1", "P2", "P3"].map((id) => ({ value: id, label: id }));
+  const pr = t.pr_url ? String(t.pr_url) : "";
+  const dueValue = dueInputValue(t.due_at, tz);
+  const dueShown = fmt(t.due_at, tz);
+  const assignee = t.assignee_id ?? "";
+  const reviewer = t.reviewer_id ?? "";
+  const priority = t.priority ?? "";
+  const href = `/t/${encodeURIComponent(t.code)}`;
+  return `<tr class="task-row"><td class="code"><a class="rowmain" href="${esc(href)}">${esc(t.code)}</a></td>
+<td class="title">${esc(t.title)}</td>
+<td>${esc(t.project_code)}</td>
+<td>${esc(t.feature_code)}</td>
+<td><span class="s-${t.status}"><span class="badge">${esc(STATUS_LABEL[t.status])}</span></span></td>
+<td>${inlineEdit({ action, name: "assignee", label: "Assignee", kind: "text", value: assignee, display: assignee ? esc(t.assignee_name || assignee) : "", editable: canAssign, options: members })}</td>
+<td>${inlineEdit({ action, name: "reviewer", label: "Reviewer", kind: "text", value: reviewer, display: reviewer ? esc(reviewer) : "", editable: canEdit, options: [{ value: "", label: "—" }, ...members] })}</td>
+<td>${inlineEdit({ action: `/f/${encodeURIComponent(t.feature_code)}`, name: "priority", label: "Priority", kind: "text", value: priority, display: priority ? esc(priority) : "", editable: leader, options: priorities })}</td>
+<td>${inlineEdit({ action, name: "due_at", label: "Due", kind: "time", value: dueValue, display: dueShown === "—" ? "" : dueShown, editable: canEdit, inputType: "datetime-local" })}</td>
+<td class="dur" title="in this status since ${fmt(since, tz)}">${formatDuration(Math.max(0, now - since))}</td>
+<td class="pr-cell">${inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: pr, display: pr ? externalAnchor(pr) : "", editable: canEdit, inputType: "url" })}</td></tr>`;
+}
+
+function renderTableMain(chrome: Chrome, rows: CardRow[], now: number, actor: Member | null, sortKey: SortKey, sortDir: SortDir): string {
+  const sorted = sortTasks(rows.map((row) => ({
+    ...row,
+    assignee_id: row.assignee_id,
+    reviewer_id: row.reviewer_id,
+    priority: row.priority,
+    due_at: row.due_at,
+    pr_url: row.pr_url,
+    status_since: row.status_since,
+    last_update_at: row.last_update_at,
+  })), sortKey, sortDir, now);
+  const members = chrome.members.map((m) => ({ value: m.id, label: m.name }));
+  const body = clusterByFeature(sorted, 1).map((item) => {
+    if (item.kind === "task") return "";
+    const id = `table:${item.feature_code}`;
+    const tasks = item.tasks.map((t) => tableRow(t, now, chrome.tz, actor, members)).join("");
+    return groupMarkup(id, item.feature_code, item.feature_title, item.tasks.length, tasks, "tbody");
+  }).join("");
+  const head = TABLE_COLUMNS.map((col) => {
+    const on = col.key === sortKey;
+    const arrow = on ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+    const aria = on ? ` aria-sort="${sortDir === "asc" ? "ascending" : "descending"}"` : "";
+    return `<th${aria}><a href="${esc(sortHref(chrome.filters, col.key, sortKey, sortDir))}">${esc(col.label)}${arrow}</a></th>`;
+  }).join("");
+  const empty = rows.length ? "" : `<tbody><tr><td class="empty" colspan="${TABLE_COLUMNS.length}">No tasks match this filter.</td></tr></tbody>`;
+  return `${boardTools(chrome, false)}<div class="table-frame"><div class="table-scroll"><table class="tasks"><thead><tr>${head}</tr></thead>${body}${empty}</table></div></div>`;
+}
+
 export async function renderBoard(db: D1Database, url: URL, email: string, now = Date.now()) {
   const chrome = await loadChrome(db, url);
   const { rows, doneTotal } = await loadCards(db, chrome.filters);
+  if (chrome.filters.view === "table") {
+    const actor = await memberForAccessEmail(db, email);
+    const sort = sortState(url);
+    return shell("Table", renderTableMain(chrome, rows, now, actor, sort.key, sort.dir), email, chrome, "board", true);
+  }
   return shell("Board", renderBoardMain(chrome, rows, doneTotal, now), email, chrome, "board", true);
 }
 

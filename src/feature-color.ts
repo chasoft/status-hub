@@ -1,14 +1,19 @@
-// Feature tints are a pure function of the feature code so a code keeps one color
-// across reloads, columns, and the table. Lightness is walked until text and the
-// outline clear WCAG contrast against the theme ink and the column surface.
+// Feature color is a pure function of the feature code. The fill is a small mix
+// into the card color (about 8% in light, 10% in dark). The outline is a stronger
+// hue that still clears non-text contrast, so the group reads as a tint rather
+// than a saturated block.
 
-export const INK_LIGHT = "#1d2733";
-export const INK_DARK = "#e7eef6";
-export const SURFACE_LIGHT = "#eef1f4";
-export const SURFACE_DARK = "#161e27";
+export const INK_LIGHT = "#1c1915";
+export const INK_DARK = "#ece7dc";
+export const CARD_LIGHT = "#fffcf7";
+export const CARD_DARK = "#1a212c";
+export const SURFACE_LIGHT = "#e7e2d6";
+export const SURFACE_DARK = "#151b24";
 
 const TEXT_CONTRAST = 4.5;
 const UI_CONTRAST = 3;
+const LIGHT_MIX = 0.08;
+const DARK_MIX = 0.1;
 
 export interface Tone {
   bg: string;
@@ -68,6 +73,14 @@ function hslHex(h: number, s: number, l: number): string {
   return rgbHex(hslRgb(h, s, l));
 }
 
+function mix(pigment: RGB, base: RGB, amount: number): RGB {
+  return [
+    pigment[0] * amount + base[0] * (1 - amount),
+    pigment[1] * amount + base[1] * (1 - amount),
+    pigment[2] * amount + base[2] * (1 - amount),
+  ];
+}
+
 /** FNV-1a folded into a hue. The same code always returns the same hue. */
 export function featureHue(code: string): number {
   let h = 2166136261;
@@ -75,19 +88,8 @@ export function featureHue(code: string): number {
     h ^= code.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  // Golden angle spreads codes that hash close together onto different hues.
   const n = h >>> 0;
   return Math.floor((n * 137.50776405003785) % 360);
-}
-
-function firstPassing(hue: number, sat: number, against: string, levels: number[], minimum: number): string {
-  let last = hslHex(hue, sat, levels[levels.length - 1] ?? 50);
-  for (const l of levels) {
-    const hex = hslHex(hue, sat, l);
-    last = hex;
-    if (contrastRatio(hex, against) >= minimum) return hex;
-  }
-  return last;
 }
 
 function range(from: number, to: number): number[] {
@@ -97,19 +99,28 @@ function range(from: number, to: number): number[] {
   return out;
 }
 
-function tone(hue: number, ink: string, surface: string, dark: boolean): Tone {
-  // Light theme: strongest pastel whose text still clears AA. Dark theme: lightest
-  // tint that still clears AA against the light ink, so the hue stays visible.
-  const bg = dark
-    ? firstPassing(hue, 42, ink, range(36, 14), TEXT_CONTRAST)
-    : firstPassing(hue, 52, ink, range(78, 96), TEXT_CONTRAST);
-  let border = dark
-    ? firstPassing(hue, 70, surface, range(58, 82), UI_CONTRAST)
-    : firstPassing(hue, 65, surface, range(46, 24), UI_CONTRAST);
-  const borderLevels = dark ? range(58, 88) : range(46, 16);
-  if (contrastRatio(border, bg) < UI_CONTRAST) {
-    border = firstPassing(hue, dark ? 70 : 65, bg, borderLevels, UI_CONTRAST);
+function outline(hue: number, sat: number, against: string[], levels: number[]): string {
+  let best = hslHex(hue, sat, levels[0] ?? 40);
+  let bestScore = -1;
+  for (const l of levels) {
+    const hex = hslHex(hue, sat, l);
+    const ratios = against.map((bg) => contrastRatio(hex, bg));
+    const score = Math.min(...ratios);
+    if (score >= UI_CONTRAST) return hex;
+    if (score > bestScore) {
+      best = hex;
+      bestScore = score;
+    }
   }
+  return best;
+}
+
+function tone(hue: number, card: string, surface: string, dark: boolean): Tone {
+  const pigment = hslRgb(hue, dark ? 46 : 52, dark ? 64 : 40);
+  const bg = rgbHex(mix(pigment, hexRgb(card), dark ? DARK_MIX : LIGHT_MIX));
+  const border = dark
+    ? outline(hue, 48, [surface, bg], range(78, 58))
+    : outline(hue, 58, [surface, bg], range(28, 46));
   return { bg, border };
 }
 
@@ -117,8 +128,8 @@ export function featurePalette(code: string): FeaturePalette {
   const hue = featureHue(code);
   return {
     hue,
-    light: tone(hue, INK_LIGHT, SURFACE_LIGHT, false),
-    dark: tone(hue, INK_DARK, SURFACE_DARK, true),
+    light: tone(hue, CARD_LIGHT, SURFACE_LIGHT, false),
+    dark: tone(hue, CARD_DARK, SURFACE_DARK, true),
   };
 }
 
