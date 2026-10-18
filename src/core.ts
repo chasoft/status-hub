@@ -62,7 +62,7 @@ const TRANSITIONS: Record<Status, Status[]> = {
   backlog: ["assigned", "pending_approval", "cancelled"], // assigned only via explicit report_status, never via assignee
   assigned: ["in_progress", "pending_approval", "cancelled"],
   in_progress: ["review", "assigned", "cancelled"], // assigned: agent stopped working
-  review: ["done", "in_progress", "cancelled"],
+  review: ["done", "in_progress", "assigned", "cancelled"], // assigned: review failed, note required
   blocked: ["pending_approval", "cancelled"],
   done: [],
   cancelled: [],
@@ -146,6 +146,11 @@ export function canEditTask(m: Member, t: { assignee_id: string | null }) {
 }
 function canTouchTask(m: Member, t: TaskRow) {
   return canEditTask(m, t);
+}
+
+/** The task's reviewer, when the caller is neither the assignee nor a leader. */
+function isOnlyReviewer(m: Member, t: TaskRow) {
+  return !canTouchTask(m, t) && !!t.reviewer_id && t.reviewer_id === m.id;
 }
 
 /** Assignee, reviewer, or the same leaders who can already edit the task. */
@@ -730,13 +735,21 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
     if (!isApprover(p.approved_by)) throw new AppError("BAD_REQUEST", "approved_by must be a configured owner or approver id");
     approvedBy = p.approved_by;
   }
-  if (!canTouchTask(actor, t)) throw new AppError("FORBIDDEN", "chỉ người được giao (hoặc pm/po/lead/admin) được báo status task này");
+  // The reviewer may only give the verdict on a task in review: done (pass) or assigned (fail).
+  const reviewerVerdict = isOnlyReviewer(actor, t) && t.status === "review" && (p.status === "done" || p.status === "assigned");
+  if (!canTouchTask(actor, t) && !reviewerVerdict) {
+    throw new AppError("FORBIDDEN", "chỉ người được giao, reviewer (review → done/assigned), hoặc pm/po/lead/admin được báo status task này");
+  }
+  if (reviewerVerdict && p.reviewer?.trim()) throw new AppError("FORBIDDEN", "reviewer không được đổi reviewer");
   if (!canTransition(t.status, p.status)) {
     throw new AppError("BAD_REQUEST", `không được chuyển ${t.status} → ${p.status}`);
   }
   const note = clipNote(p.note);
   const links = validLinks(p.links);
   if (p.status === "done" && !note) throw new AppError("BAD_REQUEST", "sang done phải có note kết quả");
+  if (t.status === "review" && p.status === "assigned" && !note) {
+    throw new AppError("BAD_REQUEST", "review → assigned (không đạt) phải có note nêu lý do");
+  }
   if (t.status === "pending_approval" && p.status === "cancelled" && !note) {
     throw new AppError("BAD_REQUEST", "từ chối pending_approval phải có note");
   }
@@ -796,6 +809,15 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
   if (p.status === "assigned" && (t.status === "backlog" || t.status === "pending_approval") && t.assignee_id && t.assignee_id !== actor.id) {
     await notifyAssigned(db, { code: t.code, title: t.title, status: "assigned" }, t.assignee_id, actor.id, now);
   }
+  if (p.status === "assigned" && t.status === "review" && t.assignee_id && t.assignee_id !== actor.id) {
+    await enqueueWebhook(db, {
+      member: t.assignee_id,
+      task: { code: t.code, title: t.title, status: "assigned" },
+      event: "task.assigned",
+      text: `Review failed on ${t.code} "${t.title}" (by ${actor.id}): ${note}. The task is back to assigned.`,
+      data: { assigned_by: actor.id, reason: "review_failed", note },
+    }, now);
+  }
   return {
     code: t.code, from: t.status, to: p.status, approved_by: approvedBy,
     reviewer_id: reviewerId ?? t.reviewer_id, alerts: await openAlertsFor(db, actor.id),
@@ -805,7 +827,7 @@ export async function reportStatus(db: D1Database, actor: Member, p: {
 // Progress note without status change (e.g. keeps STALE away).
 export async function addNote(db: D1Database, actor: Member, p: { task: string; note: string; links?: string[] }, now = Date.now()) {
   const t = await getTaskRow(db, p.task);
-  if (!canTouchTask(actor, t)) throw new AppError("FORBIDDEN", "không phải task của bạn");
+  if (!canTouchTask(actor, t) && !isOnlyReviewer(actor, t)) throw new AppError("FORBIDDEN", "không phải task của bạn");
   const note = clipNote(p.note);
   if (!note) throw new AppError("BAD_REQUEST", "note trống");
   const links = validLinks(p.links);

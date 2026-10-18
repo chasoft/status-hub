@@ -7,6 +7,8 @@ All notable changes to Status Hub are documented in this file. The project follo
 ### Added
 
 - Member webhooks, so bots are woken instead of polling. An admin registers one https URL per member, with an optional header name and secret (for example a bot's sender key), through `set_member_webhook` or inline on the Members page. The secret is write-only and is AES-GCM encrypted in D1 when the optional `WEBHOOK_SECRET_KEY` secret is set. The task's assignee gets a short JSON POST for `feedback.added`, `task.assigned`, and `blocker.resolved` (not for their own actions). Events go through a `webhook_outbox` table, are sent right away with `ctx.waitUntil` (5 second timeout), retried by the five-minute cron up to 5 attempts, and then raise a `WEBHOOK_FAILED` alert on the task. `list_webhooks` and `test_member_webhook` help admins check delivery. Migration `0013_member_webhooks.sql`.
+- Failed review path: `review` → `assigned` with a required note. The assignee's webhook gets `task.assigned` with `reason: "review_failed"` and the note.
+- The task's reviewer (`reviewer_id`) may `add_note` and give the verdict with `report_status`: `review` → `done` (pass) or `review` → `assigned` (fail). Nothing else; before, the reviewer got 403 unless they were the assignee or a leader.
 - `set_reviewer` MCP tool (admin): change or clear a task's reviewer without changing its status.
 
 - `APP_VERSION` (optional var) is shown at the bottom of the sidebar as `v<value>`, or `vdev` when unset. The dashboard script is loaded as `/assets/dashboard.js?v=<value>`, so a tab opened before a deploy fetches the new script after reload instead of running the old one. Self-hosters can set it with `pnpm run deploy -- --var APP_VERSION:1.0.$(git rev-list --count HEAD)`.
