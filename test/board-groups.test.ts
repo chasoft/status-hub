@@ -219,7 +219,16 @@ describe("table view", () => {
     expect(zebraRow).not.toContain(">Save<");
     expect(zebraRow).toContain('target="_blank"');
     expect(zebraRow).toContain('rel="noopener noreferrer"');
-    expect(zebraRow).toContain("https://github.com/example/repo/pull/4");
+    expect(zebraRow).toContain(">#4<span");
+    expect(zebraRow).toContain('title="https://github.com/example/repo/pull/4"');
+    expect(zebraRow).not.toContain(">https://github.com/example/repo/pull/4<");
+    expect(table).toContain(".tasks .ie-pen{opacity:0}");
+    expect(table).toContain("tr.task-row:hover .ie-pen");
+    expect(table).toContain("tr.task-row:focus-within .ie-pen");
+    expect(table).toContain("@media (pointer:coarse)");
+    expect(table).toContain(".card .title");
+    expect(table).toContain("td.task-title");
+    expect(DASHBOARD_JS).toContain("prShortLabel");
 
     const asc = await html("/?view=table&project=TBL&sort=title&dir=asc");
     expect(asc.indexOf("Apple unique")).toBeLessThan(asc.indexOf("Zebra unique"));

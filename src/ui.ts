@@ -45,9 +45,22 @@ const DONE_PREVIEW = 10;
 
 const EXT_ICON = `<svg class="ext" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 2.5H2.5v7h7V7.5M6.5 2.5h3v3M9.5 2.5 5.5 6.5"/></svg>`;
 
+/** Pull-request URLs show as #N. Anything else keeps the full address. */
+export function prShortLabel(href: string): string {
+  const match = /\/pulls?\/(\d+)(?:[/?#]|$)/i.exec(href);
+  if (match?.[1]) return `#${match[1]}`;
+  try {
+    const last = new URL(href).pathname.split("/").filter(Boolean).pop() ?? "";
+    if (/^\d+$/.test(last)) return `#${last}`;
+  } catch { /* not a URL */ }
+  return href;
+}
+
 /** Absolute http(s) links leave the UI host. Internal paths stay in this tab. */
 export function externalAnchor(href: string, label?: string): string {
-  return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label ?? href)}<span class="ext-icon">${EXT_ICON}<span class="sr"> (opens in a new tab)</span></span></a>`;
+  const text = label ?? href;
+  const tip = text !== href ? ` title="${esc(href)}"` : "";
+  return `<a href="${esc(href)}"${tip} target="_blank" rel="noopener noreferrer">${esc(text)}<span class="ext-icon">${EXT_ICON}<span class="sr"> (opens in a new tab)</span></span></a>`;
 }
 
 function linkList(json: string | null): string {
@@ -158,12 +171,22 @@ details.lane:not([open]) .chev{transform:rotate(-90deg)}
 .table-scroll{flex:1;min-height:0;overflow:auto;border:1px solid var(--bd);border-radius:var(--radius);background:var(--card)}
 table.tasks{width:100%;min-width:1180px;background:transparent}
 table.tasks th,table.tasks td{padding:8px 10px;vertical-align:middle;white-space:nowrap}
-table.tasks td.title{white-space:normal;min-width:14rem}
+table.tasks td.task-title{white-space:normal;min-width:14rem}
 table.tasks th{position:sticky;top:0;z-index:3;background:var(--cell)}
 table.tasks th a{color:inherit;text-decoration:none}
 table.tasks a.rowmain{color:inherit}
 .fg .group-head td{background:var(--fg);border-top:1px solid var(--fg-line);box-shadow:inset 3px 0 0 var(--fg-line);font-weight:650}
-.fg .task-row td{background:color-mix(in srgb, var(--fg) 72%, var(--card))}
+.fg .task-row,.fg .task-row>td{background:color-mix(in srgb, var(--fg) 72%, var(--card))}
+.tasks .pr-cell{max-width:12rem}
+.tasks .pr-cell .inline-edit,.tasks .pr-cell .ie-view,.tasks .pr-cell .ie-value{min-width:0;max-width:100%}
+.tasks .pr-cell .ie-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tasks .pr-cell .ie-value a{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.tasks .ie-pen{flex:none}
+.tasks .ie-pen{opacity:0}
+.tasks tr.task-row:hover .ie-pen,.tasks tr.task-row:focus-within .ie-pen{opacity:1}
+@media (pointer:coarse){
+  .tasks .ie-pen{opacity:1}
+}
 .fg.is-collapsed .task-row{display:none}
 .fg.is-collapsed .g-toggle .chev{transform:rotate(-90deg)}
 .g-toggle{display:flex;align-items:center;gap:6px;width:100%;margin:0;padding:2px 0;border:0;background:transparent;text-align:left;cursor:pointer}
@@ -171,7 +194,7 @@ table.tasks a.rowmain{color:inherit}
 .tasks .inline-edit{max-width:16rem}
 .card-top{display:flex;justify-content:space-between;align-items:center;gap:6px;min-width:0}
 .code{min-width:0;font:12px ui-monospace,monospace;color:var(--mut);overflow-wrap:anywhere}
-.title{display:block;min-width:0;font-weight:650;margin-top:4px;overflow-wrap:anywhere}
+.card .title{display:block;min-width:0;font-weight:650;margin-top:4px;overflow-wrap:anywhere}
 .meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;color:var(--mut);font-size:12px;margin-top:6px;min-width:0}
 .who{min-width:0;overflow-wrap:anywhere}
 .dur{white-space:normal;overflow-wrap:anywhere}
@@ -677,7 +700,7 @@ function tableRow(t: CardRow, now: number, tz: number, actor: Member | null, mem
   const priority = t.priority ?? "";
   const href = `/t/${encodeURIComponent(t.code)}`;
   return `<tr class="task-row"><td class="code"><a class="rowmain" href="${esc(href)}">${esc(t.code)}</a></td>
-<td class="title">${esc(t.title)}</td>
+<td class="task-title">${esc(t.title)}</td>
 <td>${esc(t.project_code)}</td>
 <td>${esc(t.feature_code)}</td>
 <td><span class="s-${t.status}"><span class="badge">${esc(STATUS_LABEL[t.status])}</span></span></td>
@@ -686,7 +709,7 @@ function tableRow(t: CardRow, now: number, tz: number, actor: Member | null, mem
 <td>${inlineEdit({ action: `/f/${encodeURIComponent(t.feature_code)}`, name: "priority", label: "Priority", kind: "text", value: priority, display: priority ? esc(priority) : "", editable: leader, options: priorities })}</td>
 <td>${inlineEdit({ action, name: "due_at", label: "Due", kind: "time", value: dueValue, display: dueShown === "—" ? "" : dueShown, editable: canEdit, inputType: "datetime-local" })}</td>
 <td class="dur" title="in this status since ${fmt(since, tz)}">${formatDuration(Math.max(0, now - since))}</td>
-<td class="pr-cell">${inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: pr, display: pr ? externalAnchor(pr) : "", editable: canEdit, inputType: "url" })}</td></tr>`;
+<td class="pr-cell">${inlineEdit({ action, name: "pr_url", label: "PR URL", kind: "url", value: pr, display: pr ? externalAnchor(pr, prShortLabel(pr)) : "", editable: canEdit, inputType: "url" })}</td></tr>`;
 }
 
 function renderTableMain(chrome: Chrome, rows: CardRow[], now: number, actor: Member | null, sortKey: SortKey, sortDir: SortDir): string {

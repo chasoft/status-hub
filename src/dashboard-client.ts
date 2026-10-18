@@ -54,10 +54,21 @@ export const DASHBOARD_JS = `
   function escText(value) {
     return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
   }
-  function externalHtml(href) {
+  function prShortLabel(href) {
+    const match = /\\/pulls?\\/(\\d+)(?:[/?#]|$)/i.exec(href);
+    if (match) return "#" + match[1];
+    try {
+      const last = new URL(href).pathname.split("/").filter(Boolean).pop() || "";
+      if (/^\\d+$/.test(last)) return "#" + last;
+    } catch (err) { /* use the full href */ }
+    return href;
+  }
+  function externalHtml(href, label) {
     const safe = escText(href);
-    if (!/^https?:\\/\\//i.test(href)) return safe;
-    return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + safe + '<span class="ext-icon"><svg class="ext" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 2.5H2.5v7h7V7.5M6.5 2.5h3v3M9.5 2.5 5.5 6.5"/></svg><span class="sr"> (opens in a new tab)</span></span></a>';
+    const text = escText(label || href);
+    if (!/^https?:\\/\\//i.test(href)) return text;
+    const tip = label && label !== href ? ' title="' + safe + '"' : "";
+    return '<a href="' + safe + '"' + tip + ' target="_blank" rel="noopener noreferrer">' + text + '<span class="ext-icon"><svg class="ext" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 2.5H2.5v7h7V7.5M6.5 2.5h3v3M9.5 2.5 5.5 6.5"/></svg><span class="sr"> (opens in a new tab)</span></span></a>';
   }
   function paintValue(form, value) {
     const slot = form.querySelector(".ie-value");
@@ -67,7 +78,10 @@ export const DASHBOARD_JS = `
       slot.textContent = "—";
       return;
     }
-    if (kind === "url") slot.innerHTML = externalHtml(value);
+    if (kind === "url") {
+      const short = form.closest("table.tasks") ? prShortLabel(value) : "";
+      slot.innerHTML = externalHtml(value, short && short !== value ? short : "");
+    }
     else if (kind === "links") {
       const parts = value.split(/\\s+/).filter(Boolean);
       slot.innerHTML = parts.length ? parts.map(externalHtml).join("<br>") : "—";
